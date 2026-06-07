@@ -156,16 +156,39 @@ class OutlookWeb:
         Busca no Outlook pela chave do MDF-e.
         Verifica se existe resposta da SEFAZ e analisa o conteudo.
 
+        IMPORTANTE: Limpa qualquer busca/email anterior antes de buscar
+        para evitar reutilizar dados do voo anterior.
+
         Args:
             chave_mdfe: Chave do MDF-e (44 digitos)
 
         Returns:
             RespostaEmail indicando se tem termos, nao tem, ou nao respondeu
         """
+        # Salva a chave atual para validacao posterior
+        self._chave_atual = chave_mdfe
+
         try:
             # Muda para aba do Outlook
             if self._aba_outlook:
                 self.driver.switch_to.window(self._aba_outlook)
+
+            # LIMPA busca anterior: clica no X de limpar busca se existir
+            try:
+                btn_limpar = self.driver.find_element(By.XPATH,
+                    "//button[contains(@aria-label,'Limpar') or "
+                    "contains(@aria-label,'Clear') or "
+                    "contains(@aria-label,'Sair da pesquisa') or "
+                    "contains(@aria-label,'Exit search')]"
+                    " | //button[contains(@class,'clearSearch')]"
+                    " | //*[contains(@data-icon-name,'Cancel') or "
+                    "contains(@data-icon-name,'Clear')]/.."
+                )
+                if btn_limpar.is_displayed():
+                    btn_limpar.click()
+                    time.sleep(2)
+            except Exception:
+                pass
 
             # Busca pela chave no campo de pesquisa
             campo_busca = self.wait.until(
@@ -179,6 +202,7 @@ class OutlookWeb:
             campo_busca.click()
             campo_busca.send_keys(Keys.CONTROL, "a")
             campo_busca.send_keys(Keys.BACKSPACE)
+            time.sleep(0.5)
             campo_busca.send_keys(chave_mdfe)
             campo_busca.send_keys(Keys.ENTER)
             time.sleep(5)

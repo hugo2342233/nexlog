@@ -442,8 +442,18 @@ class AppAutomacao:
                 caminho_pdf = outlook.baixar_anexo_pdf()
                 if caminho_pdf:
                     consulta = parsear_relatorio_pdf(caminho_pdf)
-                    self._log(f"  Relatorio do email: {consulta.total_termos} termos")
-                else:
+                    # VALIDACAO: verifica se o PDF e do voo correto
+                    # (evita usar PDF do voo anterior que ficou aberto)
+                    if consulta.chave and chave and consulta.chave != chave:
+                        self._log(f"  AVISO: PDF e de outro voo (chave diferente) - descartando")
+                        self._log(f"    Esperado: {chave[:20]}...")
+                        self._log(f"    Encontrado: {consulta.chave[:20]}...")
+                        consulta = None
+                        caminho_pdf = ""
+                    elif consulta.total_termos >= 0:
+                        self._log(f"  Relatorio do email: {consulta.total_termos} termos")
+                    
+                if not caminho_pdf or consulta is None:
                     # Tenta via site
                     sefaz.abrir_sefaz()
                     if not sefaz.logado:
