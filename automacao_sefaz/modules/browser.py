@@ -30,12 +30,29 @@ class NexlogBrowser:
         self._logado = False
 
     def iniciar(self, headless: bool = False):
-        """Inicia o navegador Chrome com configuracoes para download."""
+        """
+        Inicia o navegador Chrome com perfil dedicado para a automacao.
+        
+        Usa um perfil separado em APPDATA/automacao_sefaz/chrome_profile/
+        Isso permite:
+        - Manter sessoes salvas (Outlook, Nexlog, SEFAZ)
+        - Na primeira execucao voce faz login manualmente no Outlook
+        - Nas proximas execucoes ele ja vai estar logado
+        - Pode usar seu Chrome pessoal normalmente ao mesmo tempo
+        """
         options = webdriver.ChromeOptions()
         if headless:
             options.add_argument("--headless")
         options.add_argument("--start-maximized")
         options.add_argument("--disable-notifications")
+
+        # Perfil dedicado para a automacao (mantem sessoes salvas)
+        perfil_automacao = os.path.join(
+            os.getenv("APPDATA", os.path.expanduser("~")),
+            "automacao_sefaz", "chrome_profile"
+        )
+        os.makedirs(perfil_automacao, exist_ok=True)
+        options.add_argument(f"--user-data-dir={perfil_automacao}")
 
         # Configura pasta de downloads
         pasta_downloads = config.pasta_downloads
@@ -51,7 +68,7 @@ class NexlogBrowser:
         self.driver = webdriver.Chrome(options=options)
         self.wait = WebDriverWait(self.driver, config.timeout_padrao)
         self.wait_curto = WebDriverWait(self.driver, config.timeout_curto)
-        logger.info("Navegador iniciado")
+        logger.info(f"Navegador iniciado (perfil: {perfil_automacao})")
 
     def login_nexlog(self, usuario: str = None, senha: str = None, base: str = None):
         """Faz login no Nexlog."""
