@@ -173,6 +173,11 @@ class OutlookWeb:
             if self._aba_outlook:
                 self.driver.switch_to.window(self._aba_outlook)
 
+            # FECHA janela flutuante do email anterior (painel de leitura aberto)
+            # No Outlook Web, ao clicar num email ele abre um painel/popup
+            # que cobre a caixa de busca. Precisa fechar primeiro.
+            self._fechar_email_aberto()
+
             # LIMPA busca anterior: clica no X de limpar busca se existir
             try:
                 btn_limpar = self.driver.find_element(By.XPATH,
@@ -250,6 +255,60 @@ class OutlookWeb:
         except Exception as e:
             logger.error(f"Outlook: Erro ao buscar email: {e}")
             return RespostaEmail.INDEFINIDO
+
+    def _fechar_email_aberto(self):
+        """
+        Fecha a janela flutuante/painel de leitura de um email aberto.
+        No Outlook Web, quando clica num email, abre um painel que cobre
+        a interface. Precisa fechar para poder acessar a busca novamente.
+        
+        Tenta multiplas abordagens:
+        1. Botao X (fechar) do painel de leitura
+        2. Botao "Voltar" / seta
+        3. Tecla ESC
+        4. Clicar fora do painel
+        """
+        try:
+            # 1. Botao X de fechar o painel/popup do email
+            xpaths_fechar = [
+                # Botao fechar do painel de leitura
+                "//button[contains(@aria-label,'Fechar') or contains(@aria-label,'Close')]"
+                "[ancestor::*[contains(@class,'ReadingPane') or contains(@class,'reading') "
+                "or contains(@class,'popup') or contains(@class,'Panel')]]",
+                # Botao X generico no topo direito
+                "//div[contains(@class,'ReadingPane') or contains(@class,'reading')]"
+                "//button[contains(@aria-label,'Fechar') or contains(@aria-label,'Close')]",
+                # Botao voltar/seta
+                "//button[contains(@aria-label,'Voltar') or contains(@aria-label,'Back')]",
+                # Icone X no canto
+                "//button[contains(@data-icon-name,'Cancel') or "
+                "contains(@data-icon-name,'ChromeClose') or "
+                "contains(@data-icon-name,'Dismiss')]",
+                # Botao com classe de fechar
+                "//button[contains(@class,'close') or contains(@class,'Close')]"
+                "[ancestor::*[contains(@class,'Panel') or contains(@class,'popup') "
+                "or contains(@class,'ReadingPane')]]",
+            ]
+
+            for xpath in xpaths_fechar:
+                try:
+                    btns = self.driver.find_elements(By.XPATH, xpath)
+                    for btn in btns:
+                        if btn.is_displayed():
+                            btn.click()
+                            time.sleep(1)
+                            logger.debug("Outlook: Fechou painel de email aberto")
+                            return
+                except Exception:
+                    continue
+
+            # 2. Tenta ESC para fechar qualquer popup/painel
+            from selenium.webdriver.common.action_chains import ActionChains
+            ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+            time.sleep(1)
+
+        except Exception as e:
+            logger.debug(f"Outlook: Erro ao tentar fechar email aberto: {e}")
 
     def _extrair_corpo_email(self) -> str:
         """Extrai o texto do corpo do email aberto."""
