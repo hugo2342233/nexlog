@@ -1,0 +1,20 @@
+# Credenciais - NUNCA commitar
+credenciais.json
+*.json
+
+# Logs
+logs/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Perfil Chrome (sessao Outlook)
+outlook_profile/
+
+# IDE
+.vscode/
+.idea/
