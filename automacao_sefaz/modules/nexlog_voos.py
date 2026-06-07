@@ -286,59 +286,60 @@ class NexlogVoos:
     def _clicar_visualizar_mdfe(self) -> bool:
         """
         Clica na opcao "Visualizar integracao MDFe" no dropdown de acoes.
-        Tenta multiplas estrategias (data-click, texto, classe).
+        
+        IMPORTANTE: O texto exato e "Visualizar integração MDFe" e o data-click
+        contem "ViewMDFe". Precisamos ser ESPECIFICOS para nao clicar em
+        "Gerenciar recebimento" ou outras opcoes do menu.
         """
-        estrategias = [
-            # 1. data-click com variantes de casing
-            "//a[contains(@data-click,'ViewMDFe') or contains(@data-click,'viewMDFe') "
-            "or contains(@data-click,'viewmdfe') or contains(@data-click,'VIEWMDFE') "
-            "or contains(@data-click,'ViewMdfe')]",
+        # ETAPA 1: Busca precisa por data-click (metodo que funcionava antes)
+        try:
+            opcao = self.driver.find_element(By.XPATH,
+                "//a[contains(@data-click,'ViewMDFe')]"
+            )
+            self.driver.execute_script("arguments[0].click();", opcao)
+            logger.info("Clicou em 'Visualizar integracao MDFe' via data-click='ViewMDFe'")
+            return True
+        except Exception:
+            pass
 
-            # 2. Classe da <li> contendo VIEWMDFE (case-insensitive via translate)
-            "//li[contains(translate(@class,'abcdefghijklmnopqrstuvwxyz',"
-            "'ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'VIEWMDFE')]//a",
+        # ETAPA 2: Busca por classe da <li> pai (VIEWMDFE)
+        try:
+            opcao = self.driver.find_element(By.XPATH,
+                "//li[contains(@class,'VIEWMDFE') or contains(@class,'ViewMDFe') "
+                "or contains(@class,'viewmdfe')]//a"
+            )
+            self.driver.execute_script("arguments[0].click();", opcao)
+            logger.info("Clicou via classe da li pai (VIEWMDFE)")
+            return True
+        except Exception:
+            pass
 
-            # 3. Texto do link contendo "Visualizar" E ("integra" ou "MDFe" ou "MDF")
-            "//a[contains(.,'Visualizar') and (contains(.,'integra') "
-            "or contains(.,'Integra') or contains(.,'MDFe') or contains(.,'MDF'))]",
+        # ETAPA 3: Busca por texto EXATO — exige AMBOS "Visualizar" E "MDFe"
+        # (isso evita pegar "Gerenciar recebimento" que nao tem "MDFe")
+        try:
+            opcao = self.driver.find_element(By.XPATH,
+                "//a[contains(.,'Visualizar') and contains(.,'MDFe')]"
+            )
+            self.driver.execute_script("arguments[0].click();", opcao)
+            logger.info("Clicou via texto 'Visualizar' + 'MDFe'")
+            return True
+        except Exception:
+            pass
 
-            # 4. Texto contendo apenas "MDFe" ou "MDF-e"
-            "//a[contains(.,'MDFe') or contains(.,'MDF-e')]"
-            "[ancestor::ul[contains(@class,'dropdown') or contains(@class,'menu')]]",
+        # ETAPA 4: Busca por texto com "integra" E "MDFe" juntos
+        try:
+            opcao = self.driver.find_element(By.XPATH,
+                "//a[contains(.,'integra') and contains(.,'MDFe')]"
+                " | //a[contains(.,'Integra') and contains(.,'MDFe')]"
+            )
+            self.driver.execute_script("arguments[0].click();", opcao)
+            logger.info("Clicou via texto 'integra' + 'MDFe'")
+            return True
+        except Exception:
+            pass
 
-            # 5. Link com texto contendo "integra" dentro de um menu dropdown
-            "//ul[contains(@class,'dropdown')]//a[contains(.,'integra') or contains(.,'Integra')]",
-
-            # 6. Qualquer link dentro do dropdown que mencione MDF
-            "//ul[contains(@class,'dropdown')]//a[contains(translate(.,"
-            "'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'MDF')]",
-
-            # 7. Qualquer link com data-click dentro de dropdown visivel
-            "//ul[contains(@class,'dropdown')]//a[@data-click]"
-            "[contains(translate(@data-click,'abcdefghijklmnopqrstuvwxyz',"
-            "'ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'MDF')]",
-
-            # 8. Li com classe que contem MDF (case insensitive)
-            "//li[contains(translate(@class,'abcdefghijklmnopqrstuvwxyz',"
-            "'ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'MDF')]//a",
-        ]
-
-        for xpath in estrategias:
-            try:
-                elementos = self.driver.find_elements(By.XPATH, xpath)
-                for elem in elementos:
-                    # Aceita mesmo nao visivel (tabindex=-1 pode nao ser 'displayed')
-                    try:
-                        # Tenta via JavaScript (mais confiavel para menus dropdown)
-                        self.driver.execute_script("arguments[0].click();", elem)
-                        logger.info(f"Clicou em 'Visualizar integracao MDFe' via: {xpath[:50]}...")
-                        return True
-                    except Exception:
-                        continue
-            except Exception:
-                continue
-
-        # Ultima estrategia: busca TODOS os links no dropdown e filtra por texto
+        # ETAPA 5: Busca todos os links do dropdown e filtra com precisao
+        # Precisa ter "MDF" no texto E NAO ter "Gerenciar"/"recebimento"
         try:
             todos_links = self.driver.find_elements(By.XPATH,
                 "//ul[contains(@class,'dropdown')]//a"
@@ -346,26 +347,31 @@ class NexlogVoos:
             for link in todos_links:
                 texto = ""
                 try:
-                    texto = link.text.strip().upper()
-                    if not texto:
-                        texto = (link.get_attribute("textContent") or "").strip().upper()
+                    texto = (link.get_attribute("textContent") or "").strip()
                 except Exception:
                     continue
 
-                if "MDF" in texto or "INTEGRA" in texto:
+                texto_upper = texto.upper()
+
+                # Deve conter MDF e NAO deve conter "GERENCIAR" ou "RECEBIMENTO"
+                if "MDF" in texto_upper and "GERENCIAR" not in texto_upper and "RECEBIMENTO" not in texto_upper:
                     self.driver.execute_script("arguments[0].click();", link)
-                    logger.info(f"Clicou via busca de texto: '{texto}'")
+                    logger.info(f"Clicou via filtro de texto: '{texto.strip()}'")
                     return True
 
-                # Verifica data-click tambem
-                data_click = (link.get_attribute("data-click") or "").upper()
-                if "MDF" in data_click:
+                # Verifica data-click tambem (deve conter MDF, nao Manage/Receive)
+                data_click = (link.get_attribute("data-click") or "")
+                data_click_upper = data_click.upper()
+                if "MDF" in data_click_upper and "MANAGE" not in data_click_upper and "RECEIV" not in data_click_upper:
                     self.driver.execute_script("arguments[0].click();", link)
-                    logger.info(f"Clicou via data-click: '{data_click}'")
+                    logger.info(f"Clicou via data-click filtrado: '{data_click}'")
                     return True
         except Exception:
             pass
 
+        # ETAPA 6: Se nada funcionou, faz debug e retorna False
+        logger.error("NAO encontrou 'Visualizar integracao MDFe' no dropdown!")
+        self._debug_dropdown()
         return False
 
     def _debug_dropdown(self):
