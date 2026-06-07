@@ -196,9 +196,28 @@ class NexlogBrowser:
         logger.info("Nexlog: Na pagina de Gerenciar rotas (Recebimento)")
 
     def navegar_vendas_conhecimento_lista(self):
-        """Navega para: Vendas > Conhecimento > Lista."""
-        self.navegar_url("https://golcargo.nexlog.com/Sales/TransportOrder/")
-        time.sleep(2)
+        """
+        Navega para: Vendas > Conhecimento > Lista.
+        IMPORTANTE: Se ja esta nessa URL, o driver.get() nao recarrega.
+        Usa driver.refresh() para forcar reload nesse caso.
+        """
+        self.voltar_aba_principal()
+        self._fechar_modais()
+
+        url_destino = "https://golcargo.nexlog.com/Sales/TransportOrder/"
+        url_atual = ""
+        try:
+            url_atual = self.driver.current_url
+        except Exception:
+            pass
+
+        if url_destino in url_atual or "TransportOrder" in url_atual:
+            # Ja esta na pagina — refresh para resetar (campos de filtro etc)
+            self.driver.refresh()
+        else:
+            self.driver.get(url_destino)
+
+        time.sleep(4)
         logger.info("Nexlog: Na pagina de Conhecimento/Lista")
 
     def navegar_vendas_retencao_lista(self):

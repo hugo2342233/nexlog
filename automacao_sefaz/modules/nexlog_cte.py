@@ -52,30 +52,49 @@ class NexlogCTeOperacoes:
             aba_referencia.click()
             time.sleep(3)
 
-            # Verifica se campo esta visivel, se nao tenta abrir filtro
-            campo_visivel = self._campo_integracao_visivel()
+            # Verifica se campo esta visivel
+            if not self._campo_integracao_visivel():
+                # Tenta abrir filtro via JavaScript (clica no pai do i.fa-filter)
+                logger.debug("Campo nao visivel, tentando abrir filtro via JS...")
+                self._tentar_abrir_filtro()
+                time.sleep(2)
 
-            if not campo_visivel:
-                # Tenta clicar em qualquer elemento que possa ser o filtro
-                logger.debug("Campo integracao nao visivel apos navegacao, tentando filtro...")
-                campo_visivel = self._tentar_abrir_filtro()
-
-            if not campo_visivel:
-                # ULTIMO RECURSO: refresh da pagina (F5) e tenta de novo
-                logger.warning("Campo AINDA nao visivel - fazendo refresh...")
-                self.driver.refresh()
-                time.sleep(4)
-                # Clica na aba de novo
-                try:
-                    aba_ref2 = self.wait.until(
-                        EC.element_to_be_clickable((By.XPATH,
-                            "//a[contains(.,'Por refer')]"
-                        ))
-                    )
-                    aba_ref2.click()
-                    time.sleep(3)
-                except Exception:
-                    pass
+            if not self._campo_integracao_visivel():
+                # FALLBACK: forca exibicao via JavaScript
+                # Expande qualquer container colapsado que contenha o campo
+                logger.warning("Filtro nao abriu - forcando exibicao via JS...")
+                self.driver.execute_script("""
+                    // Busca containers colapsados e expande os que tem 'integra'
+                    var els = document.querySelectorAll('.collapse, [style*="display: none"], [style*="display:none"], .panel-collapse');
+                    for (var i = 0; i < els.length; i++) {
+                        var el = els[i];
+                        var txt = (el.textContent || '').toLowerCase();
+                        if (txt.indexOf('integra') !== -1 || txt.indexOf('pesquisar') !== -1) {
+                            el.style.display = 'block';
+                            el.style.height = 'auto';
+                            el.style.overflow = 'visible';
+                            el.classList.add('show');
+                            el.classList.add('in');
+                            el.classList.remove('collapsing');
+                        }
+                    }
+                    // Busca inputs hidden com 'Integration' e mostra seus parents
+                    var inputs = document.querySelectorAll('input[id*="Integration"], input[name*="Integration"]');
+                    for (var j = 0; j < inputs.length; j++) {
+                        var input = inputs[j];
+                        var parent = input.parentElement;
+                        while (parent && parent !== document.body) {
+                            if (parent.style.display === 'none' || parent.classList.contains('collapse')) {
+                                parent.style.display = 'block';
+                                parent.style.height = 'auto';
+                                parent.classList.add('show');
+                                parent.classList.add('in');
+                            }
+                            parent = parent.parentElement;
+                        }
+                    }
+                """)
+                time.sleep(2)
 
             # Preenche campo "Numero integracao"
             campo_integracao = self.wait.until(
@@ -135,71 +154,42 @@ class NexlogCTeOperacoes:
         """
         Clica no botao de filtro para mostrar os campos.
         O botao e um icone: <i class="fal fa-filter"></i>
-        
-        Usa JavaScript direto para encontrar e clicar, pois XPaths
-        normais nao estao funcionando neste caso.
+        Usa JavaScript puro para encontrar e clicar.
         """
         try:
-            # ESTRATEGIA 1: JavaScript direto — mais confiavel
+            # JavaScript: encontra i.fa-filter e clica no pai
             clicou = self.driver.execute_script("""
+                // Busca por classe exata
                 var icones = document.querySelectorAll('i.fa-filter, i[class*="fa-filter"]');
-                for (var i = 0; i < icones.length; i++) {
-                    var icone = icones[i];
-                    var pai = icone.parentElement;
-                    if (pai) { pai.click(); return true; }
+                if (icones.length > 0) {
+                    var pai = icones[0].parentElement;
+                    if (pai) { pai.click(); return 'pai'; }
+                    icones[0].click(); return 'icone';
                 }
-                if (icones.length > 0) { icones[0].click(); return true; }
-                return false;
+                // Busca qualquer elemento com filter na classe
+                var todos = document.querySelectorAll('[class*="filter"]');
+                for (var i = 0; i < todos.length; i++) {
+                    var el = todos[i];
+                    var tag = el.tagName.toLowerCase();
+                    if (tag === 'i' || tag === 'button' || tag === 'a' || tag === 'span') {
+                        el.click(); return 'generico-' + tag;
+                    }
+                    if (tag === 'i') {
+                        var p = el.parentElement;
+                        if (p) { p.click(); return 'generico-pai'; }
+                    }
+                }
+                return null;
             """)
 
             if clicou:
+                logger.debug(f"Filtro clicado via JS: {clicou}")
                 time.sleep(2)
-                if self._campo_integracao_visivel():
-                    logger.debug("Filtro aberto via JavaScript (fa-filter)")
-                    return True
-
-            # ESTRATEGIA 2: CSS Selector
-            for css in ["i.fa-filter", "i[class*='fa-filter']", ".fa-filter"]:
-                try:
-                    elementos = self.driver.find_elements(By.CSS_SELECTOR, css)
-                    for elem in elementos:
-                        pai = self.driver.execute_script(
-                            "return arguments[0].parentElement;", elem
-                        )
-                        if pai:
-                            self.driver.execute_script("arguments[0].click();", pai)
-                            time.sleep(2)
-                            if self._campo_integracao_visivel():
-                                logger.debug(f"Filtro aberto via CSS: {css}")
-                                return True
-                except Exception:
-                    continue
-
-            # ESTRATEGIA 3: Busca qualquer coisa com 'filter' na classe via JS
-            clicou2 = self.driver.execute_script("""
-                var todos = document.querySelectorAll('*');
-                for (var i = 0; i < todos.length; i++) {
-                    var el = todos[i];
-                    var cls = (el.className || '').toString().toLowerCase();
-                    if (cls.indexOf('filter') !== -1 && cls.indexOf('fa') !== -1) {
-                        var pai = el.parentElement;
-                        if (pai) { pai.click(); return true; }
-                        el.click(); return true;
-                    }
-                }
-                return false;
-            """)
-
-            if clicou2:
-                time.sleep(2)
-                if self._campo_integracao_visivel():
-                    logger.debug("Filtro aberto via JS generico")
-                    return True
+                return self._campo_integracao_visivel()
 
         except Exception as e:
-            logger.debug(f"Erro ao tentar abrir filtro: {e}")
+            logger.debug(f"Erro JS filtro: {e}")
 
-        logger.warning("NAO conseguiu abrir o filtro!")
         return False
 
     def _ler_awb_resultado(self) -> str:
@@ -294,7 +284,6 @@ class NexlogCTeOperacoes:
                 ))
             )
             if not checkbox_critico.is_selected():
-                # Tenta clicar diretamente ou via JavaScript
                 try:
                     checkbox_critico.click()
                 except Exception:
@@ -325,7 +314,6 @@ class NexlogCTeOperacoes:
 
             # 7. Fecha modal Rastreio
             try:
-                # Tenta fechar com X ou botao Fechar
                 botao_fechar_rastreio = self.driver.find_element(By.XPATH,
                     "//div[contains(@class,'modal')]//button[contains(@class,'close')]"
                     " | //div[contains(@class,'modal')]//button[contains(.,'Fechar')]"
@@ -352,20 +340,13 @@ class NexlogCTeOperacoes:
         Processa todos os termos de um voo:
         - Para cada CTe com termo, busca o AWB
         - Adiciona comentario critico no AWB
-        - Agrupa termos do mesmo CTe em um unico comentario
 
         Returns:
             Dict mapeando CTe -> AWB (para uso posterior na liberacao)
         """
         mapa_cte_awb = {}
         ctes_processados = set()
-
-        # Agrupa termos por CTe (pode ter multiplos termos pro mesmo CTe)
         ctes_unicos = list(set(consulta.ctes_retidos))
-
-        # Navega para a pagina de lista de conhecimentos
-        self.browser.navegar_vendas_conhecimento_lista()
-        time.sleep(2)
 
         for cte in ctes_unicos:
             if cte in ctes_processados:
@@ -373,18 +354,13 @@ class NexlogCTeOperacoes:
 
             logger.info(f"Processando CTe {cte}...")
 
-            # 1. Busca AWB do CTe
             awb = self.buscar_awb_do_cte(cte)
             if not awb:
                 logger.warning(f"CTe {cte}: AWB nao encontrado - pulando")
                 continue
 
             mapa_cte_awb[cte] = awb
-
-            # 2. Gera comentario (com todos os termos deste CTe)
             comentario = consulta.comentario_para_cte(cte)
-
-            # 3. Adiciona comentario critico no AWB
             sucesso = self.adicionar_comentario_critico(awb, comentario)
 
             if sucesso:
