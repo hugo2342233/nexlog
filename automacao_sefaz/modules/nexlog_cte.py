@@ -101,11 +101,9 @@ class NexlogCTeOperacoes:
         Garante que o campo 'Numero integracao' esta visivel.
         Se nao estiver, clica no botao de filtro para mostrar.
         
-        O botao de filtro e um TOGGLE:
-        - Se campos OCULTOS -> clica -> campos APARECEM
-        - Se campos VISIVEIS -> clica -> campos SOMEM (NAO queremos isso!)
-        
-        Por isso, so clica se o campo NAO esta visivel.
+        No Nexlog (Conhecimento/Lista), apos pesquisar os campos somem.
+        O botao de filtro e um icone de funil na barra superior,
+        proximo ao badge "Filtro aplicado".
         """
         campo_visivel = False
         try:
@@ -122,26 +120,42 @@ class NexlogCTeOperacoes:
         if not campo_visivel:
             logger.debug("Campo integracao NAO visivel - tentando abrir filtro...")
             
-            # Tenta TODAS as formas de encontrar o botao de filtro
+            # Estrategias para encontrar o botao de filtro no Nexlog
             seletores_filtro = [
-                # Icone de funil/filtro (FontAwesome)
+                # 1. Icone fa-filter — elemento pai clicavel
+                "//*[contains(@class,'fa-filter')]/ancestor::button",
+                "//*[contains(@class,'fa-filter')]/ancestor::a",
                 "//*[contains(@class,'fa-filter')]/..",
                 "//*[contains(@class,'fa-filter')]",
-                # Botao com classe filter
+                # 2. Glyphicon filter
+                "//*[contains(@class,'glyphicon-filter')]/ancestor::button",
+                "//*[contains(@class,'glyphicon-filter')]/..",
+                "//*[contains(@class,'glyphicon-filter')]",
+                # 3. Proximo ao badge "Filtro aplicado"
+                "//*[contains(text(),'Filtro aplicado')]/ancestor::div[1]//button",
+                "//*[contains(text(),'Filtro aplicado')]/preceding-sibling::*[self::button or self::a]",
+                "//*[contains(text(),'Filtro aplicado')]/following-sibling::*[self::button or self::a]",
+                "//*[contains(text(),'Filtro aplicado')]/..",
+                # 4. Barra de ferramentas / panel heading
+                "//div[contains(@class,'panel-heading') or contains(@class,'card-header') "
+                "or contains(@class,'toolbar')]//button",
+                "//div[contains(@class,'panel-heading') or contains(@class,'card-header') "
+                "or contains(@class,'toolbar')]//a[contains(@class,'btn')]",
+                # 5. Botao/link com classe filter
                 "//button[contains(@class,'filter')]",
                 "//a[contains(@class,'filter')]",
-                # Botao com title
+                # 6. Botao com title filtro
                 "//button[contains(@title,'iltro') or contains(@title,'ilter')]",
                 "//a[contains(@title,'iltro') or contains(@title,'ilter')]",
-                # Botao com texto "Filtro" ou icone
-                "//button[contains(.,'Filtro') or contains(.,'filtro')]",
-                # Icone de busca/filtro no header da secao
-                "//*[contains(@class,'glyphicon-filter')]/..",
-                # Link/botao proximo ao "Pesquisar" que parece filtro
-                "//button[contains(@class,'btn') and contains(@class,'filt')]",
-                # Qualquer elemento com data-toggle que contenha filtro
-                "//*[@data-toggle='collapse'][contains(@href,'filter') or contains(@href,'Filter')]",
-                "//*[@data-toggle='collapse'][contains(@data-target,'filter') or contains(@data-target,'Filter')]",
+                # 7. data-toggle collapse com filter
+                "//*[@data-toggle='collapse'][contains(@href,'ilter') "
+                "or contains(@data-target,'ilter')]",
+                # 8. aria-label
+                "//*[contains(@aria-label,'iltro') or contains(@aria-label,'ilter')]",
+                # 9. Icone SVG ou span com icone
+                "//span[contains(@class,'icon') and contains(@class,'filter')]/..",
+                # 10. Qualquer i (icone) que parece filtro
+                "//i[contains(@class,'filter') or contains(@class,'funnel')]/..",
             ]
             
             for xpath in seletores_filtro:
@@ -149,7 +163,10 @@ class NexlogCTeOperacoes:
                     elementos = self.driver.find_elements(By.XPATH, xpath)
                     for elem in elementos:
                         if elem.is_displayed():
-                            elem.click()
+                            try:
+                                elem.click()
+                            except Exception:
+                                self.driver.execute_script("arguments[0].click();", elem)
                             time.sleep(1.5)
                             
                             # Verifica se o campo apareceu
@@ -164,9 +181,15 @@ class NexlogCTeOperacoes:
                                 if campo_teste2.is_displayed():
                                     logger.debug(f"Filtro aberto via: {xpath[:50]}")
                                     return
+                                else:
+                                    # Nao apareceu — clica de novo pra reverter
+                                    try:
+                                        elem.click()
+                                        time.sleep(0.5)
+                                    except Exception:
+                                        pass
                             except Exception:
-                                # Clicou mas campo nao apareceu - pode ter escondido
-                                # Clica de novo para reverter
+                                # Campo nao no DOM — reverter
                                 try:
                                     elem.click()
                                     time.sleep(0.5)
@@ -176,9 +199,14 @@ class NexlogCTeOperacoes:
                 except Exception:
                     continue
             
-            # Se nada funcionou, loga aviso
-            logger.warning("NAO conseguiu abrir o filtro de integracao! "
-                         "O campo pode nao aparecer.")
+            # FALLBACK: Se nada funcionou, renavega para a pagina
+            # Isso reseta a view e mostra os campos novamente
+            logger.warning("NAO conseguiu abrir o filtro! Renavegando para Conhecimento/Lista...")
+            try:
+                self.browser.navegar_vendas_conhecimento_lista()
+                time.sleep(3)
+            except Exception:
+                pass
 
     def _ler_awb_resultado(self) -> str:
         """Le o AWB (N. documento) da primeira linha da tabela de resultados."""
