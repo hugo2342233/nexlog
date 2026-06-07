@@ -47,7 +47,21 @@ class SefazConsulta:
         logger.info("SEFAZ: Navegador pronto")
 
     def login(self, usuario: str = None, senha: str = None):
-        """Faz login no portal de transportadoras da SEFAZ-AL."""
+        """
+        Faz login no portal de transportadoras da SEFAZ-AL.
+        
+        Fluxo real do site:
+        1. Pagina carrega com header "Termo de Averiguacao - TADe"
+        2. No canto superior direito tem menu dropdown "Conta"
+        3. Clicar em "Conta" abre dropdown com opcao "Entrar"
+        4. Clicar em "Entrar" abre MODAL de autenticacao com:
+           - Titulo: "Autenticacao"  (com X para fechar)
+           - Campo "Usuario" (placeholder "Seu usuario")
+           - Campo "Senha" (placeholder "Sua senha")
+           - Checkbox "Manter-me logado"
+           - Botao azul "Entrar"
+        5. Apos login: mostra 3 botoes (Consultar TADe, Consulta Analise MDF-e, etc)
+        """
         usuario = usuario or config.sefaz.usuario
         senha = senha or config.sefaz.senha
 
@@ -58,157 +72,193 @@ class SefazConsulta:
         time.sleep(5)  # SPA precisa de mais tempo pra carregar
 
         try:
-            # O site mostra "Realize o login para ver os servicos disponiveis"
-            # O login fica no menu "Conta" no canto superior direito
-            # Tenta clicar no menu/link "Conta" ou "Login"
+            # PASSO 1: Clicar no menu "Conta" (dropdown no header)
+            logger.info("SEFAZ: Clicando no menu 'Conta'...")
+            menu_conta = self.wait.until(
+                EC.element_to_be_clickable((
+                    By.XPATH,
+                    # Menu "Conta" com icone de usuario no header
+                    "//a[contains(.,'Conta')] | "
+                    "//a[contains(@class,'dropdown') and contains(.,'Conta')] | "
+                    "//*[@id='navbarSupportedContent']//a[contains(.,'Conta')] | "
+                    "//nav//a[contains(.,'Conta')] | "
+                    "//li[contains(@class,'dropdown')]//a[contains(.,'Conta')] | "
+                    "//a[@data-toggle='dropdown' and contains(.,'Conta')]"
+                ))
+            )
+            menu_conta.click()
+            time.sleep(2)
+
+            # PASSO 2: Clicar em "Entrar" no dropdown
+            logger.info("SEFAZ: Clicando em 'Entrar'...")
+            opcao_entrar = self.wait.until(
+                EC.element_to_be_clickable((
+                    By.XPATH,
+                    # Link/botao "Entrar" no dropdown de Conta
+                    "//a[contains(.,'Entrar')] | "
+                    "//a[contains(@data-target,'login') or contains(@data-target,'Login')] | "
+                    "//a[contains(@data-target,'modal')] | "
+                    "//li//a[contains(.,'Entrar')] | "
+                    "//div[contains(@class,'dropdown-menu')]//a[contains(.,'Entrar')]"
+                ))
+            )
+            opcao_entrar.click()
+            time.sleep(3)
+
+            # PASSO 3: Aguardar modal de "Autenticacao" abrir
+            # O modal tem titulo "Autenticacao" e campos de login
+            logger.info("SEFAZ: Aguardando modal de autenticacao...")
+
+            # Espera o modal ficar visivel
             try:
-                menu_conta = self.wait.until(
-                    EC.element_to_be_clickable((
+                WebDriverWait(self.driver, 10).until(
+                    EC.visibility_of_element_located((
                         By.XPATH,
-                        "//a[contains(text(),'Conta')] | "
-                        "//button[contains(text(),'Conta')] | "
-                        "//a[contains(text(),'Login')] | "
-                        "//a[contains(text(),'login')] | "
-                        "//li[contains(.,'Conta')]//a | "
-                        "//*[contains(@class,'dropdown')]//a[contains(.,'Conta')]"
+                        "//div[contains(@class,'modal') and contains(@style,'display: block')] | "
+                        "//div[contains(@class,'modal-dialog')] | "
+                        "//div[contains(@class,'modal-content')] | "
+                        "//h4[contains(.,'Autentica')] | "
+                        "//h5[contains(.,'Autentica')]"
                     ))
                 )
-                menu_conta.click()
-                time.sleep(2)
             except TimeoutException:
-                logger.info("SEFAZ: Menu 'Conta' nao encontrado, tentando login direto")
+                logger.info("SEFAZ: Modal pode ja estar visivel, continuando...")
 
-            # Tenta clicar em "Entrar" ou "Login" no submenu
-            try:
-                opcao_login = WebDriverWait(self.driver, 5).until(
-                    EC.element_to_be_clickable((
-                        By.XPATH,
-                        "//a[contains(text(),'Entrar')] | "
-                        "//a[contains(text(),'Login')] | "
-                        "//button[contains(text(),'Entrar')] | "
-                        "//a[contains(@href,'login')] | "
-                        "//a[contains(@href,'Login')]"
-                    ))
-                )
-                opcao_login.click()
-                time.sleep(3)
-            except TimeoutException:
-                logger.info("SEFAZ: Opcao 'Entrar' nao encontrada, pode ja estar na tela de login")
-
-            # Agora busca os campos de login
-            # Tenta multiplas estrategias de seletores
-            campo_usuario = self._encontrar_campo_usuario()
-            if campo_usuario is None:
-                raise RuntimeError("Nao encontrou campo de usuario/login")
-
+            # PASSO 4: Preencher campo "Usuario" (placeholder "Seu usuario")
+            campo_usuario = self.wait.until(
+                EC.element_to_be_clickable((
+                    By.XPATH,
+                    # Busca pelo placeholder exato que aparece no print
+                    "//input[contains(@placeholder,'usu') or contains(@placeholder,'Usu')]"
+                    " | //input[contains(@placeholder,'seu usu') or contains(@placeholder,'Seu usu')]"
+                    " | //div[contains(@class,'modal')]//input[@type='text']"
+                    " | //div[contains(@class,'modal')]//input[not(@type='password') "
+                    "and not(@type='checkbox') and not(@type='hidden')]"
+                ))
+            )
             campo_usuario.clear()
             campo_usuario.send_keys(usuario)
+            logger.info(f"SEFAZ: Usuario preenchido")
 
+            # PASSO 5: Preencher campo "Senha" (placeholder "Sua senha")
             campo_senha = self.wait.until(
                 EC.element_to_be_clickable((
                     By.XPATH,
                     "//input[@type='password']"
+                    " | //input[contains(@placeholder,'senha') or contains(@placeholder,'Senha')]"
                 ))
             )
             campo_senha.clear()
             campo_senha.send_keys(senha)
+            logger.info("SEFAZ: Senha preenchida")
 
-            # Botao de login/entrar
-            botao = self.wait.until(
+            # PASSO 6: Clicar botao "Entrar" (azul, dentro do modal)
+            botao_entrar = self.wait.until(
                 EC.element_to_be_clickable((
                     By.XPATH,
-                    "//button[@type='submit'] | "
-                    "//button[contains(text(),'Entrar')] | "
-                    "//button[contains(text(),'Login')] | "
-                    "//button[contains(text(),'Acessar')] | "
-                    "//input[@type='submit'] | "
-                    "//button[contains(@class,'btn-primary')] | "
-                    "//button[contains(@class,'btn') and contains(@class,'login')]"
+                    # Botao azul "Entrar" dentro do modal
+                    "//div[contains(@class,'modal')]//button[contains(.,'Entrar')]"
+                    " | //div[contains(@class,'modal')]//button[contains(@class,'btn-primary')]"
+                    " | //div[contains(@class,'modal')]//button[@type='submit']"
+                    " | //button[contains(@class,'btn-primary') and contains(.,'Entrar')]"
+                    " | //button[contains(.,'Entrar') and not(contains(@class,'dropdown'))]"
                 ))
             )
-            botao.click()
+            botao_entrar.click()
 
+            # PASSO 7: Aguardar login ser processado
             time.sleep(5)
-            self._logado = True
-            logger.info("SEFAZ: Login realizado com sucesso")
 
-        except TimeoutException:
-            logger.error("SEFAZ: Nao encontrou campos de login")
-            raise RuntimeError("Falha no login da SEFAZ - campos nao encontrados")
-
-    def _encontrar_campo_usuario(self):
-        """
-        Tenta encontrar o campo de usuario com diversas estrategias.
-        Sites SPA podem ter IDs dinamicos, entao tenta varias abordagens.
-        """
-        seletores = [
-            # Por tipo e placeholder
-            "//input[contains(@placeholder,'usu') or contains(@placeholder,'Usu')]",
-            "//input[contains(@placeholder,'login') or contains(@placeholder,'Login')]",
-            "//input[contains(@placeholder,'CPF') or contains(@placeholder,'cpf')]",
-            "//input[contains(@placeholder,'CNPJ') or contains(@placeholder,'cnpj')]",
-            "//input[contains(@placeholder,'E-mail') or contains(@placeholder,'email')]",
-            # Por id/name
-            "//input[@id='username' or @id='login' or @id='user' or @id='email']",
-            "//input[@name='username' or @name='login' or @name='user' or @name='email']",
-            # Por tipo (text que NAO e senha e NAO e busca)
-            "//input[@type='text' and not(contains(@placeholder,'Pesquis')) "
-            "and not(contains(@placeholder,'Busca'))]",
-            "//input[@type='email']",
-            # Por label
-            "//label[contains(text(),'usu') or contains(text(),'Usu') or "
-            "contains(text(),'Login')]//following::input[1]",
-            # Primeiro input visivel em formulario
-            "//form//input[@type='text' or @type='email'][1]",
-        ]
-
-        for xpath in seletores:
+            # Verifica se login foi bem sucedido
+            # Apos login, aparece "Voce esta logado como [usuario]"
+            # e os 3 botoes de consulta
             try:
-                campo = WebDriverWait(self.driver, 3).until(
-                    EC.element_to_be_clickable((By.XPATH, xpath))
-                )
-                if campo.is_displayed():
-                    logger.info(f"SEFAZ: Campo usuario encontrado com: {xpath[:50]}")
-                    return campo
-            except TimeoutException:
-                continue
-
-        return None
-
-    def navegar_consulta_analise_mdfe(self):
-        """Navega ate a pagina de Consulta Analise MDF-e."""
-        try:
-            # Clica no menu/botao de Consulta Analise MDF-e
-            botao_consulta = self.wait.until(
-                EC.element_to_be_clickable((
-                    By.XPATH,
-                    "//a[contains(text(),'Consulta')] | "
-                    "//button[contains(text(),'Consulta')] | "
-                    "//span[contains(text(),'Consulta')]"
-                ))
-            )
-            botao_consulta.click()
-            time.sleep(2)
-
-            # Se houver submenu "Analise MDFe"
-            try:
-                opcao_mdfe = self.wait.until(
-                    EC.element_to_be_clickable((
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((
                         By.XPATH,
-                        "//*[contains(text(),'An') and contains(text(),'lise MDF')] | "
-                        "//*[contains(text(),'Análise MDF')]"
+                        "//*[contains(.,'logado como')] | "
+                        "//*[contains(.,'Consultar TADe')] | "
+                        "//*[contains(.,'Consulta An')]"
                     ))
                 )
-                opcao_mdfe.click()
-                time.sleep(2)
+                self._logado = True
+                logger.info("SEFAZ: Login realizado com sucesso!")
             except TimeoutException:
-                # Talvez ja esteja na pagina certa
-                pass
+                # Pode ter dado erro de credenciais
+                page_text = self.driver.find_element(By.TAG_NAME, "body").text
+                if "incorret" in page_text.lower() or "inv" in page_text.lower():
+                    raise RuntimeError("SEFAZ: Credenciais incorretas")
+                # Assume que logou mesmo sem confirmar
+                self._logado = True
+                logger.warning("SEFAZ: Login feito mas nao confirmou tela pos-login")
+
+        except TimeoutException as e:
+            logger.error(f"SEFAZ: Timeout no login - {e}")
+            raise RuntimeError(
+                "Falha no login da SEFAZ.\n"
+                "Verifique se o site esta acessivel e as credenciais estao corretas."
+            )
+        except RuntimeError:
+            raise
+        except Exception as e:
+            logger.error(f"SEFAZ: Erro inesperado no login - {e}")
+            raise RuntimeError(f"Erro no login SEFAZ: {e}")
+
+    def navegar_consulta_analise_mdfe(self):
+        """
+        Navega ate a pagina de Consulta Analise MDF-e.
+        Apos login, a tela mostra 3 botoes grandes azuis:
+        - "Consultar TADe"
+        - "Consulta Analise MDF-e"
+        - "Registro de Passagem"
+        
+        Clica no botao "Consulta Analise MDF-e".
+        """
+        try:
+            logger.info("SEFAZ: Clicando em 'Consulta Analise MDF-e'...")
+            
+            # Botao grande azul "Consulta Analise MDF-e"
+            botao_mdfe = self.wait.until(
+                EC.element_to_be_clickable((
+                    By.XPATH,
+                    # Tenta pelo texto do botao
+                    "//*[contains(.,'lise MDF') and (self::a or self::button or self::div)]"
+                    " | //a[contains(.,'lise MDF')]"
+                    " | //button[contains(.,'lise MDF')]"
+                    " | //*[contains(@class,'card') or contains(@class,'btn')]"
+                    "[contains(.,'MDF')]"
+                    " | //div[contains(.,'Consulta') and contains(.,'MDF')]"
+                    "/ancestor-or-self::a"
+                ))
+            )
+            botao_mdfe.click()
+            time.sleep(3)
 
             logger.info("SEFAZ: Na pagina de Consulta Analise MDF-e")
 
         except TimeoutException:
-            logger.warning("SEFAZ: Tentando acesso direto a consulta")
+            # Tenta via menu se os botoes nao funcionaram
+            logger.warning("SEFAZ: Botao MDF-e nao encontrado, tentando via Menu...")
+            try:
+                menu = self.wait.until(
+                    EC.element_to_be_clickable((
+                        By.XPATH,
+                        "//a[contains(.,'Menu')] | //button[contains(.,'Menu')]"
+                    ))
+                )
+                menu.click()
+                time.sleep(1)
+
+                opcao = self.wait.until(
+                    EC.element_to_be_clickable((
+                        By.XPATH,
+                        "//a[contains(.,'MDF')] | //a[contains(.,'Análise')]"
+                    ))
+                )
+                opcao.click()
+                time.sleep(3)
+            except TimeoutException:
+                raise RuntimeError("SEFAZ: Nao conseguiu navegar para Consulta Analise MDF-e")
 
     def consultar_chave_mdfe(self, chave: str) -> Optional[ConsultaMDFe]:
         """
