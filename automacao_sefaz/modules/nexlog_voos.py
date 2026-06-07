@@ -208,89 +208,92 @@ class NexlogVoos:
         """
         Clica na opcao "Visualizar integracao MDFe" no dropdown de acoes.
         
-        IMPORTANTE: O texto exato e "Visualizar integração MDFe" e o data-click
-        contem "ViewMDFe". Precisamos ser ESPECIFICOS para nao clicar em
-        "Gerenciar recebimento" ou outras opcoes do menu.
+        IMPORTANTE: Busca APENAS no dropdown VISIVEL/ABERTO para nao clicar
+        na opcao de outro voo. Os XPaths globais (//a[...]) podem pegar
+        elementos de dropdowns de OUTRAS linhas da tabela.
         """
-        # ETAPA 1: Busca precisa por data-click (metodo que funcionava antes)
+        # Primeiro, encontra o dropdown ABERTO (visivel) para buscar DENTRO dele
+        dropdown_aberto = None
         try:
-            opcao = self.driver.find_element(By.XPATH,
+            dropdowns = self.driver.find_elements(By.XPATH,
+                "//ul[contains(@class,'dropdown-menu')]"
+            )
+            for dd in dropdowns:
+                if dd.is_displayed():
+                    dropdown_aberto = dd
+                    break
+        except Exception:
+            pass
+
+        # === Se encontrou dropdown aberto, busca DENTRO dele (relativo) ===
+        if dropdown_aberto:
+            # ETAPA 1: data-click com ViewMDFe DENTRO do dropdown
+            try:
+                opcao = dropdown_aberto.find_element(By.XPATH,
+                    ".//a[contains(@data-click,'ViewMDFe')]"
+                )
+                self.driver.execute_script("arguments[0].click();", opcao)
+                logger.info("Clicou em 'Visualizar integracao MDFe' via data-click (dropdown local)")
+                return True
+            except Exception:
+                pass
+
+            # ETAPA 2: classe da <li> com VIEWMDFE DENTRO do dropdown
+            try:
+                opcao = dropdown_aberto.find_element(By.XPATH,
+                    ".//li[contains(@class,'VIEWMDFE') or contains(@class,'ViewMDFe')]//a"
+                )
+                self.driver.execute_script("arguments[0].click();", opcao)
+                logger.info("Clicou via classe li (dropdown local)")
+                return True
+            except Exception:
+                pass
+
+            # ETAPA 3: texto "Visualizar" + "MDFe" DENTRO do dropdown
+            try:
+                opcao = dropdown_aberto.find_element(By.XPATH,
+                    ".//a[contains(.,'Visualizar') and contains(.,'MDFe')]"
+                )
+                self.driver.execute_script("arguments[0].click();", opcao)
+                logger.info("Clicou via texto 'Visualizar'+'MDFe' (dropdown local)")
+                return True
+            except Exception:
+                pass
+
+            # ETAPA 4: busca todos os links DENTRO do dropdown e filtra
+            try:
+                todos_links = dropdown_aberto.find_elements(By.TAG_NAME, "a")
+                for link in todos_links:
+                    texto = (link.get_attribute("textContent") or "").strip().upper()
+                    data_click = (link.get_attribute("data-click") or "").upper()
+
+                    if "MDF" in texto or "MDF" in data_click:
+                        if "GERENCIAR" not in texto and "RECEBIMENTO" not in texto:
+                            self.driver.execute_script("arguments[0].click();", link)
+                            logger.info(f"Clicou via filtro local: '{texto.strip()}'")
+                            return True
+            except Exception:
+                pass
+
+        # === FALLBACK: busca global mas SOMENTE elementos visiveis ===
+        logger.warning("Dropdown local nao encontrado ou sem opcao MDF, tentando global...")
+
+        try:
+            opcoes = self.driver.find_elements(By.XPATH,
                 "//a[contains(@data-click,'ViewMDFe')]"
             )
-            self.driver.execute_script("arguments[0].click();", opcao)
-            logger.info("Clicou em 'Visualizar integracao MDFe' via data-click='ViewMDFe'")
-            return True
-        except Exception:
-            pass
-
-        # ETAPA 2: Busca por classe da <li> pai (VIEWMDFE)
-        try:
-            opcao = self.driver.find_element(By.XPATH,
-                "//li[contains(@class,'VIEWMDFE') or contains(@class,'ViewMDFe') "
-                "or contains(@class,'viewmdfe')]//a"
-            )
-            self.driver.execute_script("arguments[0].click();", opcao)
-            logger.info("Clicou via classe da li pai (VIEWMDFE)")
-            return True
-        except Exception:
-            pass
-
-        # ETAPA 3: Busca por texto EXATO — exige AMBOS "Visualizar" E "MDFe"
-        # (isso evita pegar "Gerenciar recebimento" que nao tem "MDFe")
-        try:
-            opcao = self.driver.find_element(By.XPATH,
-                "//a[contains(.,'Visualizar') and contains(.,'MDFe')]"
-            )
-            self.driver.execute_script("arguments[0].click();", opcao)
-            logger.info("Clicou via texto 'Visualizar' + 'MDFe'")
-            return True
-        except Exception:
-            pass
-
-        # ETAPA 4: Busca por texto com "integra" E "MDFe" juntos
-        try:
-            opcao = self.driver.find_element(By.XPATH,
-                "//a[contains(.,'integra') and contains(.,'MDFe')]"
-                " | //a[contains(.,'Integra') and contains(.,'MDFe')]"
-            )
-            self.driver.execute_script("arguments[0].click();", opcao)
-            logger.info("Clicou via texto 'integra' + 'MDFe'")
-            return True
-        except Exception:
-            pass
-
-        # ETAPA 5: Busca todos os links do dropdown e filtra com precisao
-        # Precisa ter "MDF" no texto E NAO ter "Gerenciar"/"recebimento"
-        try:
-            todos_links = self.driver.find_elements(By.XPATH,
-                "//ul[contains(@class,'dropdown')]//a"
-            )
-            for link in todos_links:
-                texto = ""
+            for opcao in opcoes:
                 try:
-                    texto = (link.get_attribute("textContent") or "").strip()
+                    if opcao.is_displayed():
+                        self.driver.execute_script("arguments[0].click();", opcao)
+                        logger.info("Clicou via data-click global (visivel)")
+                        return True
                 except Exception:
                     continue
-
-                texto_upper = texto.upper()
-
-                # Deve conter MDF e NAO deve conter "GERENCIAR" ou "RECEBIMENTO"
-                if "MDF" in texto_upper and "GERENCIAR" not in texto_upper and "RECEBIMENTO" not in texto_upper:
-                    self.driver.execute_script("arguments[0].click();", link)
-                    logger.info(f"Clicou via filtro de texto: '{texto.strip()}'")
-                    return True
-
-                # Verifica data-click tambem (deve conter MDF, nao Manage/Receive)
-                data_click = (link.get_attribute("data-click") or "")
-                data_click_upper = data_click.upper()
-                if "MDF" in data_click_upper and "MANAGE" not in data_click_upper and "RECEIV" not in data_click_upper:
-                    self.driver.execute_script("arguments[0].click();", link)
-                    logger.info(f"Clicou via data-click filtrado: '{data_click}'")
-                    return True
         except Exception:
             pass
 
-        # ETAPA 6: Se nada funcionou, faz debug e retorna False
+        # Se nada funcionou
         logger.error("NAO encontrou 'Visualizar integracao MDFe' no dropdown!")
         self._debug_dropdown()
         return False
@@ -424,9 +427,28 @@ class NexlogVoos:
                 return ""
 
             # Procura link de volumes (texto tipo "58 vol(s), 289,023 kg")
-            link_volumes = linha.find_element(By.XPATH,
-                ".//a[contains(.,'vol(s)')] | .//td[contains(.,'vol(s)')]//a"
-            )
+            # Pode ser um <a> ou pode estar dentro de um <td> clicavel
+            try:
+                link_volumes = linha.find_element(By.XPATH,
+                    ".//a[contains(.,'vol(s)')] | .//td[contains(.,'vol(s)')]//a"
+                )
+            except Exception:
+                # Fallback: tenta clicar no td que contem "vol(s)" diretamente
+                try:
+                    link_volumes = linha.find_element(By.XPATH,
+                        ".//td[contains(.,'vol(s)')]"
+                    )
+                except Exception:
+                    # Ultimo fallback: tenta clicar na coluna "Assinado" (geralmente col 7 ou 8)
+                    try:
+                        link_volumes = linha.find_element(By.XPATH,
+                            ".//td[contains(.,'kg')] | .//td[contains(.,'vol')]"
+                        )
+                    except Exception:
+                        logger.error(f"Voo {voo.numero_controle}: coluna de volumes nao encontrada")
+                        logger.debug(f"Texto da linha: {linha.text[:200]}")
+                        return ""
+
             link_volumes.click()
             time.sleep(3)
 
