@@ -145,19 +145,24 @@ class NexlogCTeOperacoes:
         </button>
         Classe e "toogleFilter" (typo com 2 'o' do desenvolvedor).
         """
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+
+        # Aguarda o botao estar presente e clicavel (max 10s)
         try:
-            # ESTRATEGIA 1: CSS Selector com classe exata "toogleFilter"
-            botao = self.driver.find_element(By.CSS_SELECTOR, "button.toogleFilter")
+            botao = WebDriverWait(self.driver, 10).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, "button.toogleFilter"))
+            )
             botao.click()
             time.sleep(2)
             if self._campo_integracao_visivel():
-                logger.debug("Filtro aberto via button.toogleFilter (CSS)")
+                logger.debug("Filtro aberto via button.toogleFilter (wait+click)")
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Estrategia 1 falhou: {e}")
 
+        # ESTRATEGIA 2: JavaScript direto
         try:
-            # ESTRATEGIA 2: JavaScript com querySelector
             self.driver.execute_script(
                 "var btn = document.querySelector('button.toogleFilter'); "
                 "if (btn) { btn.click(); }"
@@ -166,21 +171,25 @@ class NexlogCTeOperacoes:
             if self._campo_integracao_visivel():
                 logger.debug("Filtro aberto via JS toogleFilter")
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Estrategia 2 falhou: {e}")
 
+        # ESTRATEGIA 3: Busca TODOS botoes com toogleFilter (pode ter mais de 1)
         try:
-            # ESTRATEGIA 3: XPath com classe toogleFilter
-            botao = self.driver.find_element(By.XPATH,
-                "//button[contains(@class,'toogleFilter')]"
-            )
-            self.driver.execute_script("arguments[0].click();", botao)
-            time.sleep(2)
-            if self._campo_integracao_visivel():
-                logger.debug("Filtro aberto via XPath toogleFilter")
-                return True
-        except Exception:
-            pass
+            botoes = self.driver.find_elements(By.CSS_SELECTOR, "button.toogleFilter")
+            logger.debug(f"Encontrados {len(botoes)} botoes toogleFilter")
+            for btn in botoes:
+                try:
+                    if btn.is_displayed():
+                        self.driver.execute_script("arguments[0].click();", btn)
+                        time.sleep(2)
+                        if self._campo_integracao_visivel():
+                            logger.debug("Filtro aberto via loop toogleFilter")
+                            return True
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.debug(f"Estrategia 3 falhou: {e}")
 
         logger.warning("NAO conseguiu abrir o filtro toogleFilter!")
         return False

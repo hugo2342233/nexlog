@@ -198,8 +198,8 @@ class NexlogBrowser:
     def navegar_vendas_conhecimento_lista(self):
         """
         Navega para: Vendas > Conhecimento > Lista.
-        IMPORTANTE: Se ja esta nessa URL, o driver.get() nao recarrega.
-        Usa driver.refresh() para forcar reload nesse caso.
+        Se ja esta na pagina, NAO faz nada (nem refresh).
+        O refresh tira da aba 'Por referencia' e esconde os campos.
         """
         self.voltar_aba_principal()
         self._fechar_modais()
@@ -212,12 +212,12 @@ class NexlogBrowser:
             pass
 
         if url_destino in url_atual or "TransportOrder" in url_atual:
-            # Ja esta na pagina — refresh para resetar (campos de filtro etc)
-            self.driver.refresh()
+            # Ja esta na pagina — NAO recarrega (preserva aba/filtro)
+            logger.debug("Ja esta em TransportOrder - nao recarrega")
         else:
             self.driver.get(url_destino)
+            time.sleep(4)
 
-        time.sleep(4)
         logger.info("Nexlog: Na pagina de Conhecimento/Lista")
 
     def navegar_vendas_retencao_lista(self):
