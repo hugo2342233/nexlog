@@ -48,20 +48,35 @@ class NexlogCTeOperacoes:
             aba_referencia.click()
             time.sleep(2)
 
-            # Verifica se precisa clicar no icone de filtro primeiro
+            # Verifica se o campo de integracao JA esta visivel ANTES de tocar no filtro
+            # O botao de filtro e um TOGGLE - se os campos ja estao visiveis,
+            # clicar nele VAI ESCONDER os campos!
+            campo_visivel = False
             try:
-                filtro_btn = self.driver.find_element(By.XPATH,
-                    "//button[contains(@class,'filter')] | "
-                    "//*[contains(@class,'fa-filter')]/.."
+                campo_teste = self.driver.find_element(By.XPATH,
+                    "//input[contains(@id,'Integration') or contains(@name,'Integration') "
+                    "or contains(@id,'integration')]"
+                    " | //label[contains(.,'integra')]//following::input[1]"
+                    " | //input[contains(@placeholder,'integra')]"
                 )
-                if filtro_btn.is_displayed():
-                    filtro_btn.click()
-                    time.sleep(1)
+                campo_visivel = campo_teste.is_displayed()
             except Exception:
                 pass
 
+            if not campo_visivel:
+                # Campo NAO esta visivel - clica no filtro para MOSTRAR
+                try:
+                    filtro_btn = self.driver.find_element(By.XPATH,
+                        "//button[contains(@class,'filter')] | "
+                        "//*[contains(@class,'fa-filter')]/.."
+                    )
+                    if filtro_btn.is_displayed():
+                        filtro_btn.click()
+                        time.sleep(1)
+                except Exception:
+                    pass
+
             # Preenche campo "Numero integracao"
-            # No print, e o penultimo campo na segunda linha de filtros
             campo_integracao = self.wait.until(
                 EC.element_to_be_clickable((By.XPATH,
                     "//input[contains(@id,'Integration') or contains(@name,'Integration') "

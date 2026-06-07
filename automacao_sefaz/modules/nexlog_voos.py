@@ -417,12 +417,11 @@ class NexlogVoos:
             Caminho do arquivo PDF baixado, ou "" se falhar
         """
         try:
-            # Clica no link de volumes/peso (coluna "Assinado")
-            linhas = self.driver.find_elements(By.XPATH, "//table//tbody//tr")
-            if voo.indice_tabela >= len(linhas):
+            # Encontra a linha do voo pelo numero de controle (mais robusto que indice)
+            linha = self._encontrar_linha_voo(voo.numero_controle)
+            if linha is None:
+                logger.error(f"Voo {voo.numero_controle} nao encontrado na tabela para baixar manifesto")
                 return ""
-
-            linha = linhas[voo.indice_tabela]
 
             # Procura link de volumes (texto tipo "58 vol(s), 289,023 kg")
             link_volumes = linha.find_element(By.XPATH,
