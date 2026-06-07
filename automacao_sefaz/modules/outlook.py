@@ -44,8 +44,13 @@ class OutlookWeb:
     def abrir_outlook(self):
         """
         Abre o Outlook em uma nova aba do navegador.
-        Salva a referencia da aba para poder voltar depois.
+        Se nao estiver logado, PAUSA e pede para o usuario fazer login manualmente.
         """
+        # Se ja tem aba do Outlook aberta, reutiliza
+        if self._aba_outlook and self._aba_outlook in self.driver.window_handles:
+            self.driver.switch_to.window(self._aba_outlook)
+            return
+
         self._aba_original = self.driver.current_window_handle
 
         # Abre nova aba
@@ -62,6 +67,12 @@ class OutlookWeb:
         time.sleep(5)
 
         # Verifica se esta logado
+        if not self._verificar_logado():
+            # NAO esta logado - pausa inteligente
+            self._aguardar_login_manual()
+
+    def _verificar_logado(self) -> bool:
+        """Verifica se o Outlook esta com sessao ativa."""
         try:
             WebDriverWait(self.driver, 15).until(
                 EC.presence_of_element_located((By.XPATH,
@@ -70,14 +81,75 @@ class OutlookWeb:
                     "contains(@placeholder,'Pesquis') or "
                     "contains(@placeholder,'Search')]"
                     " | //button[contains(@aria-label,'Nova')]"
+                    " | //div[contains(@class,'mailList')]"
                 ))
             )
             logger.info("Outlook: Sessao ativa detectada")
+            return True
         except TimeoutException:
-            logger.warning(
-                "Outlook: Nao detectou sessao ativa. "
-                "O usuario pode precisar fazer login manual na primeira vez."
-            )
+            return False
+
+    def _aguardar_login_manual(self):
+        """
+        Pausa inteligente: mostra mensagem e espera o usuario fazer login.
+        Fica verificando a cada 5 segundos se o login foi feito.
+        Timeout maximo: 5 minutos.
+        """
+        import tkinter as tk
+        from tkinter import messagebox
+
+        logger.warning("Outlook: Sessao nao detectada - aguardando login manual")
+
+        # Mostra popup para o usuario
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+
+        messagebox.showinfo(
+            "Login Necessario - Outlook",
+            "O Outlook nao esta logado.\n\n"
+            "Por favor, faca login na janela do Chrome que abriu\n"
+            "e depois clique OK para continuar.\n\n"
+            "DICA: Na proxima execucao ele ja vai lembrar o login!",
+            parent=root
+        )
+        root.destroy()
+
+        # Apos o usuario clicar OK, verifica se logou
+        tempo_max = 300  # 5 minutos
+        tempo_inicio = time.time()
+
+        while time.time() - tempo_inicio < tempo_max:
+            if self._verificar_logado():
+                logger.info("Outlook: Login manual realizado com sucesso!")
+                return
+
+            # Ainda nao logou - espera mais um pouco
+            time.sleep(5)
+
+            # Verifica se passou muito tempo
+            if time.time() - tempo_inicio > 60:
+                # Mostra outro popup
+                root2 = tk.Tk()
+                root2.withdraw()
+                root2.attributes("-topmost", True)
+
+                resposta = messagebox.askretrycancel(
+                    "Outlook - Aguardando Login",
+                    "Ainda nao detectei o login no Outlook.\n\n"
+                    "Ja fez login? Clique 'Repetir' para verificar novamente.\n"
+                    "Ou 'Cancelar' para pular a verificacao do email.",
+                    parent=root2
+                )
+                root2.destroy()
+
+                if not resposta:
+                    # Cancelou - pula a verificacao
+                    logger.warning("Outlook: Login cancelado pelo usuario")
+                    raise RuntimeError("Login do Outlook cancelado")
+
+        logger.error("Outlook: Timeout aguardando login manual")
+        raise RuntimeError("Timeout aguardando login do Outlook")
 
     def buscar_por_chave(self, chave_mdfe: str) -> RespostaEmail:
         """

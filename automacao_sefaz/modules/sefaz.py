@@ -63,6 +63,7 @@ class SefazConsulta:
         """
         Faz login no portal de transportadoras da SEFAZ-AL.
         Fluxo: Conta -> Entrar -> Modal autenticacao -> Preenche -> Botao Entrar
+        Se falhar, mostra pausa inteligente para login manual.
         """
         usuario = usuario or config.sefaz.usuario
         senha = senha or config.sefaz.senha
@@ -151,12 +152,55 @@ class SefazConsulta:
                 self._logado = True
                 logger.info("SEFAZ: Login realizado com sucesso!")
             except TimeoutException:
-                self._logado = True
-                logger.warning("SEFAZ: Login feito mas nao confirmou tela pos-login")
+                # Pode ter dado erro - tenta pausa inteligente
+                self._aguardar_login_manual_sefaz()
 
         except Exception as e:
-            logger.error(f"SEFAZ: Erro no login: {e}")
-            raise RuntimeError(f"Falha no login da SEFAZ: {e}")
+            logger.error(f"SEFAZ: Erro no login automatico: {e}")
+            # Tenta pausa inteligente como fallback
+            self._aguardar_login_manual_sefaz()
+
+    def _aguardar_login_manual_sefaz(self):
+        """
+        Pausa inteligente para login manual na SEFAZ.
+        Mostra popup e aguarda o usuario fazer login.
+        """
+        import tkinter as tk
+        from tkinter import messagebox
+
+        logger.warning("SEFAZ: Login automatico falhou - aguardando login manual")
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+
+        messagebox.showinfo(
+            "Login Necessario - SEFAZ",
+            "O login automatico na SEFAZ falhou.\n\n"
+            "Possiveis causas:\n"
+            "- Senha alterada\n"
+            "- Site fora do ar\n"
+            "- Captcha ou verificacao\n\n"
+            "Por favor, faca login manualmente na janela do Chrome\n"
+            "e depois clique OK para continuar.",
+            parent=root
+        )
+        root.destroy()
+
+        # Verifica se logou
+        try:
+            WebDriverWait(self.driver, 30).until(
+                EC.presence_of_element_located((By.XPATH,
+                    "//*[contains(.,'logado como')]"
+                    " | //*[contains(.,'Consultar TADe')]"
+                    " | //*[contains(.,'Consulta An')]"
+                ))
+            )
+            self._logado = True
+            logger.info("SEFAZ: Login manual realizado com sucesso!")
+        except TimeoutException:
+            logger.error("SEFAZ: Login nao detectado apos intervencao manual")
+            raise RuntimeError("Falha no login da SEFAZ")
 
     def navegar_consulta_analise_mdfe(self):
         """Clica no botao 'Consulta Analise MDF-e' (botao azul grande)."""
