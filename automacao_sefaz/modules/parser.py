@@ -259,6 +259,29 @@ def parsear_relatorio_sefaz(texto: str) -> ConsultaMDFe:
     status = parsear_status_mdfe(texto)
     termos = extrair_termos(texto)
 
+    # IMPORTANTE: Se o relatorio diz explicitamente "TOTAL DE TERMOS 0",
+    # confiamos nele e descartamos qualquer "termo" encontrado pelo parser
+    # (sao falsos positivos - numeros de 7 digitos que nao sao termos reais).
+    # Tambem verifica mensagens explicitas de "nao encontrados termos".
+    relatorio_diz_zero = (
+        total_termos == 0 and
+        re.search(r'TOTAL DE TERMOS\s*0', texto, re.IGNORECASE) is not None
+    )
+    nao_encontrou_termos = (
+        "não foram encontrados termos" in texto.lower() or
+        "nao foram encontrados termos" in texto.lower() or
+        "Não foram encontrados termos" in texto
+    )
+
+    if relatorio_diz_zero or nao_encontrou_termos:
+        if termos:
+            logger.warning(
+                f"Relatorio diz 0 termos mas parser achou {len(termos)} - "
+                f"descartando (falso positivo)"
+            )
+        termos = []
+        total_termos = 0
+
     # Extrair data de emissao
     match_data = re.search(r'DATA DE EMISS[ÃA]O\s*(\d{2}/\d{2}/\d{4})', texto, re.IGNORECASE)
     data_emissao = match_data.group(1) if match_data else ""
@@ -273,6 +296,11 @@ def parsear_relatorio_sefaz(texto: str) -> ConsultaMDFe:
     match_cnpj = re.search(r'CNPJ[:\s]+([\d./-]+)', texto)
     cnpj = match_cnpj.group(1).strip() if match_cnpj else ""
 
+    # Determina total_termos final:
+    # Se o relatorio informa um valor > 0, usa ele.
+    # Senao, usa a quantidade de termos que o parser encontrou.
+    total_final = total_termos if total_termos > 0 else len(termos)
+
     consulta = ConsultaMDFe(
         chave=chave,
         numero_mdfe=numero_mdfe,
@@ -280,13 +308,14 @@ def parsear_relatorio_sefaz(texto: str) -> ConsultaMDFe:
         emitente=emitente,
         cnpj_emitente=cnpj,
         status=status,
-        total_termos=total_termos if total_termos > 0 else len(termos),
+        total_termos=total_final,
         termos=termos,
     )
 
     logger.info(
         f"Relatorio parseado: MDF-e {numero_mdfe} | "
-        f"{len(termos)} termos encontrados | "
+        f"{len(termos)} termos reais | "
+        f"Total declarado: {total_termos} | "
         f"Status: {status.value}"
     )
 
