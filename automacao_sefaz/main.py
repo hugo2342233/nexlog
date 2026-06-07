@@ -403,6 +403,11 @@ class AppAutomacao:
 
         # --- ETAPA 2: Baixar manifesto (RETIRA/ENTREGA) ---
         self._log("  [2/6] Baixando manifesto...")
+        # Garante que estamos na pagina de Operacoes > Gerenciar Rotas com a tabela visivel
+        # (a etapa 1 pode ter aberto/fechado modais que prejudicam a tabela)
+        browser.navegar_operacoes_gerenciar_rotas()
+        voos_mod.pesquisar_voos(data_ini, data_fim)
+        time.sleep(2)
         caminho_manifesto = voos_mod.baixar_manifesto(voo)
         manifesto = None
         if caminho_manifesto:
