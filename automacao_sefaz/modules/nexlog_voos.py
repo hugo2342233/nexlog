@@ -180,20 +180,31 @@ class NexlogVoos:
             time.sleep(2)
 
             # Clica em "Visualizar integracao MDFe" no menu dropdown
-            # O texto pode estar com acentos ou separado em sub-elementos
-            time.sleep(1)  # Espera menu abrir completamente
-            opcao_mdfe = self.wait.until(
-                EC.element_to_be_clickable((By.XPATH,
-                    "//a[contains(.,'Visualizar integra')]"
-                    " | //a[contains(.,'integra') and contains(.,'MDF')]"
-                    " | //li//a[contains(.,'MDF')]"
-                    " | //*[contains(.,'Visualizar') and contains(.,'MDFe')]"
-                    "[self::a or self::li or self::span or self::button]"
-                    " | //a[contains(@href,'Mdfe') or contains(@href,'mdfe') "
-                    "or contains(@href,'MDFe')]"
-                ))
-            )
-            opcao_mdfe.click()
+            # O elemento tem tabindex="-1" e usa data-click com JavaScript,
+            # entao precisamos usar JavaScript executor para clicar
+            time.sleep(2)  # Espera menu abrir completamente
+            
+            # Busca o link pelo atributo data-click que contem "ViewMDFe"
+            # ou pelo texto "Visualizar integra" 
+            try:
+                opcao_mdfe = self.wait.until(
+                    EC.presence_of_element_located((By.XPATH,
+                        "//a[contains(@data-click,'ViewMDFe')]"
+                        " | //a[contains(@data-click,'ViewMDFe')]"
+                        " | //li[contains(@class,'VIEWMDFE')]//a"
+                    ))
+                )
+            except TimeoutException:
+                # Fallback: busca pelo texto
+                opcao_mdfe = self.wait.until(
+                    EC.presence_of_element_located((By.XPATH,
+                        "//a[contains(.,'Visualizar integra')]"
+                        " | //a[contains(.,'MDFe')]"
+                    ))
+                )
+            
+            # Usa JavaScript para clicar (contorna tabindex="-1")
+            self.driver.execute_script("arguments[0].click();", opcao_mdfe)
             time.sleep(5)
 
             # Le a chave da tabela no modal
