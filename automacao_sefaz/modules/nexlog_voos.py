@@ -179,12 +179,18 @@ class NexlogVoos:
             botao_acoes.click()
             time.sleep(2)
 
-            # Clica em "Visualizar integracao MDFe"
+            # Clica em "Visualizar integracao MDFe" no menu dropdown
+            # O texto pode estar com acentos ou separado em sub-elementos
+            time.sleep(1)  # Espera menu abrir completamente
             opcao_mdfe = self.wait.until(
                 EC.element_to_be_clickable((By.XPATH,
-                    "//*[contains(text(),'Visualizar integra') and contains(text(),'MDFe')]"
-                    " | //a[contains(text(),'Visualizar integra')]"
-                    " | //a[contains(.,'integra') and contains(.,'MDFe')]"
+                    "//a[contains(.,'Visualizar integra')]"
+                    " | //a[contains(.,'integra') and contains(.,'MDF')]"
+                    " | //li//a[contains(.,'MDF')]"
+                    " | //*[contains(.,'Visualizar') and contains(.,'MDFe')]"
+                    "[self::a or self::li or self::span or self::button]"
+                    " | //a[contains(@href,'Mdfe') or contains(@href,'mdfe') "
+                    "or contains(@href,'MDFe')]"
                 ))
             )
             opcao_mdfe.click()
