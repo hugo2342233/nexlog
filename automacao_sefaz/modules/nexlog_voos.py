@@ -164,32 +164,34 @@ class NexlogVoos:
                 logger.error(f"Voo {voo.numero_controle} nao encontrado na tabela")
                 return ""
 
-            # Scroll para a linha ficar visivel
-            self.driver.execute_script(
-                "arguments[0].scrollIntoView({block:'center'});", linha
-            )
-            time.sleep(1)
+            # Procura o botao de acoes na ultima coluna (setinha/dropdown)
+            try:
+                botao_acoes = linha.find_element(By.XPATH,
+                    ".//td[last()]//button | .//td[last()]//a[contains(@class,'dropdown')] "
+                    "| .//td[last()]//*[contains(@class,'btn')] "
+                    "| .//td[last()]//*[contains(@class,'action')] "
+                    "| .//td[last()]//i[contains(@class,'fa')]/.."
+                )
+            except Exception:
+                # Tenta clicar no ultimo td diretamente
+                botao_acoes = linha.find_element(By.XPATH, ".//td[last()]")
+            
+            botao_acoes.click()
+            time.sleep(2)
 
-            # --- ETAPA 1: Abrir dropdown de acoes ---
-            dropdown_aberto = self._abrir_dropdown_acoes(linha)
-            if not dropdown_aberto:
-                logger.error(f"Nao conseguiu abrir dropdown de acoes do voo {voo.numero_controle}")
-                return ""
-
-            time.sleep(1)
-
-            # --- ETAPA 2: Clicar em "Visualizar integracao MDFe" ---
+            # Clica em "Visualizar integracao MDFe" no menu dropdown
+            time.sleep(2)  # Espera menu abrir completamente
+            
             clicou_mdfe = self._clicar_visualizar_mdfe()
             if not clicou_mdfe:
                 logger.error(f"Nao conseguiu clicar em 'Visualizar integracao MDFe'")
-                # Debug: mostra o conteudo do dropdown
                 self._debug_dropdown()
                 self._fechar_dropdown()
                 return ""
 
             time.sleep(5)
 
-            # --- ETAPA 3: Ler chave do modal ---
+            # Le a chave da tabela no modal
             chave = self._ler_chave_modal()
 
             # Fecha o modal
@@ -201,87 +203,6 @@ class NexlogVoos:
             logger.error(f"Erro ao extrair chave MDF-e do voo {voo.numero_controle}: {e}")
             self._fechar_modal_integracao()
             return ""
-
-    def _abrir_dropdown_acoes(self, linha) -> bool:
-        """
-        Abre o dropdown de acoes na ultima coluna da linha.
-        Tenta multiplas estrategias para encontrar e clicar no botao.
-        """
-        estrategias_botao = [
-            # 1. Botao dropdown na ultima coluna
-            ".//td[last()]//button[contains(@class,'dropdown')]",
-            # 2. Qualquer botao na ultima coluna
-            ".//td[last()]//button",
-            # 3. Link com classe dropdown na ultima coluna
-            ".//td[last()]//a[contains(@class,'dropdown')]",
-            # 4. Icone de engrenagem/setinha (fa-cog, fa-ellipsis, fa-chevron)
-            ".//td[last()]//*[contains(@class,'fa-cog') or contains(@class,'fa-ellipsis') "
-            "or contains(@class,'fa-chevron') or contains(@class,'fa-angle')]/..",
-            # 5. Qualquer elemento com classe 'btn' na ultima coluna
-            ".//td[last()]//*[contains(@class,'btn')]",
-            # 6. Qualquer link na ultima coluna
-            ".//td[last()]//a",
-            # 7. Ultimo td inteiro (fallback)
-            ".//td[last()]",
-            # 8. Botao/link com data-toggle="dropdown"
-            ".//*[@data-toggle='dropdown']",
-            # 9. Qualquer icone na ultima coluna
-            ".//td[last()]//i/..",
-        ]
-
-        for xpath in estrategias_botao:
-            try:
-                elementos = linha.find_elements(By.XPATH, xpath)
-                for elem in elementos:
-                    if elem.is_displayed():
-                        try:
-                            elem.click()
-                        except Exception:
-                            self.driver.execute_script("arguments[0].click();", elem)
-                        time.sleep(1.5)
-
-                        # Verifica se um menu dropdown apareceu
-                        if self._dropdown_visivel():
-                            logger.debug(f"Dropdown aberto via: {xpath[:50]}")
-                            return True
-            except Exception:
-                continue
-
-        return False
-
-    def _dropdown_visivel(self) -> bool:
-        """Verifica se existe um dropdown/menu visivel na pagina."""
-        seletores = [
-            "//ul[contains(@class,'dropdown-menu') and contains(@class,'show')]",
-            "//ul[contains(@class,'dropdown-menu')][contains(@style,'display: block') "
-            "or contains(@style,'display:block')]",
-            "//div[contains(@class,'dropdown-menu') and contains(@class,'show')]",
-            "//div[contains(@class,'dropdown') and contains(@class,'open')]//ul",
-            "//ul[contains(@class,'dropdown-menu') and not(contains(@style,'display: none'))]"
-            "[not(contains(@style,'display:none'))]",
-        ]
-
-        for xpath in seletores:
-            try:
-                elementos = self.driver.find_elements(By.XPATH, xpath)
-                for elem in elementos:
-                    if elem.is_displayed():
-                        return True
-            except Exception:
-                continue
-
-        # Fallback: verifica se tem algum <li> com link visivel que parece menu
-        try:
-            opcoes = self.driver.find_elements(By.XPATH,
-                "//ul[contains(@class,'dropdown')]//li//a[contains(@data-click,'')]"
-            )
-            visiveis = [o for o in opcoes if o.is_displayed()]
-            if len(visiveis) >= 2:
-                return True
-        except Exception:
-            pass
-
-        return False
 
     def _clicar_visualizar_mdfe(self) -> bool:
         """
