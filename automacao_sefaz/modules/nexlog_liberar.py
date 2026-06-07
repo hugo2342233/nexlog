@@ -96,13 +96,16 @@ class NexlogLiberar:
 
     def selecionar_awbs_para_liberacao(self, awbs: Set[str]) -> Dict[str, str]:
         """
-        Para cada AWB na lista, pesquisa no campo de filtro da DataTable
-        e seleciona usando o menu "Tudo" (exatamente como script original).
-
-        Baseado no script original (Liberar_retencao.py):
-        - Campo: //*[@id='RetentionList_filter']/label/input
-        - Menu: //div[contains(@class,'divDataTableSelection')]
-        - Opcao: //span[contains(@class,'DataTableSelectionAll')]
+        Para cada AWB, filtra na tabela e marca o CHECKBOX individual.
+        
+        IMPORTANTE: No Nexlog, o "Selecionar Tudo" NAO persiste entre filtros.
+        Mas o checkbox INDIVIDUAL de cada linha persiste. Entao o fluxo e:
+        1. Filtrar por AWB
+        2. Marcar o checkbox da linha
+        3. Limpar filtro e filtrar proximo AWB
+        4. Marcar checkbox
+        5. ... repete
+        6. No final, todos os checkboxes marcados ficam e pode liberar
 
         Args:
             awbs: Set de AWBs para tentar liberar
@@ -116,15 +119,13 @@ class NexlogLiberar:
             "erros": [],
         }
 
-        # XPaths exatos do script original
+        # XPath do campo de filtro
         xpath_input = (
             "//*[@id='RetentionList_filter']/label/input"
             " | //*[@id='RetentionList_filter']//input"
             " | //div[contains(@id,'_filter')]//input"
             " | //input[contains(@type,'search')]"
         )
-        xpath_menu = "//div[contains(@class,'divDataTableSelection')]"
-        xpath_opcao_tudo = "//span[contains(@class,'DataTableSelectionAll')]"
 
         for awb in awbs:
             try:
@@ -143,13 +144,11 @@ class NexlogLiberar:
                 time.sleep(2)  # Tempo para a tabela filtrar
 
                 # 3. Verifica se a tabela tem resultados
-                # Se filtrou e nao tem linhas, AWB ja foi liberado
                 try:
                     linhas = self.driver.find_elements(By.XPATH,
                         "//table[@id='RetentionList']//tbody//tr"
                         " | //table//tbody//tr"
                     )
-                    # Verifica se tem a mensagem "Nenhum registro"
                     tem_resultado = False
                     for linha in linhas:
                         texto = linha.text.strip()
@@ -164,23 +163,58 @@ class NexlogLiberar:
                 except Exception:
                     pass
 
-                # 4. Clica no menu de selecao (exatamente como script original)
-                menu = self.wait.until(
-                    EC.element_to_be_clickable((By.XPATH, xpath_menu))
-                )
-                menu.click()
+                # 4. Marca o checkbox da linha (individual, persiste entre filtros)
+                checkbox_marcado = False
+                try:
+                    # Busca checkbox na primeira linha visivel da tabela filtrada
+                    checkboxes = self.driver.find_elements(By.XPATH,
+                        "//table[@id='RetentionList']//tbody//tr//input[@type='checkbox']"
+                        " | //table//tbody//tr//input[@type='checkbox']"
+                    )
+                    for cb in checkboxes:
+                        try:
+                            if cb.is_displayed() and not cb.is_selected():
+                                try:
+                                    cb.click()
+                                except Exception:
+                                    self.driver.execute_script("arguments[0].click();", cb)
+                                checkbox_marcado = True
+                                break
+                            elif cb.is_displayed() and cb.is_selected():
+                                # Ja estava marcado
+                                checkbox_marcado = True
+                                break
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
 
-                # 5. Clica em "Tudo" (seleciona todas as linhas filtradas)
-                opcao = self.wait.until(
-                    EC.visibility_of_element_located((By.XPATH, xpath_opcao_tudo))
-                )
-                opcao.click()
-
-                logger.info(f"AWB {awb}: selecionado (menu 'Tudo' clicado)")
-                resultado["selecionados"].append(awb)
+                if checkbox_marcado:
+                    logger.info(f"AWB {awb}: checkbox marcado")
+                    resultado["selecionados"].append(awb)
+                else:
+                    # Fallback: tenta via td-check (classe comum de coluna de checkbox)
+                    try:
+                        td_check = self.driver.find_element(By.XPATH,
+                            "//table//tbody//tr//td[contains(@class,'td-check')]//input"
+                            " | //table//tbody//tr//td[1]//input[@type='checkbox']"
+                        )
+                        if td_check.is_displayed():
+                            try:
+                                td_check.click()
+                            except Exception:
+                                self.driver.execute_script("arguments[0].click();", td_check)
+                            logger.info(f"AWB {awb}: checkbox marcado (fallback td-check)")
+                            resultado["selecionados"].append(awb)
+                        else:
+                            resultado["erros"].append(awb)
+                            logger.error(f"AWB {awb}: checkbox nao encontrado/visivel")
+                    except Exception:
+                        resultado["erros"].append(awb)
+                        logger.error(f"AWB {awb}: checkbox nao encontrado")
 
                 # Pausa entre AWBs
-                time.sleep(2)
+                time.sleep(1)
 
             except TimeoutException:
                 resultado["erros"].append(awb)
