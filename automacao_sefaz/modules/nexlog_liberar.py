@@ -98,14 +98,11 @@ class NexlogLiberar:
         """
         Para cada AWB, filtra na tabela e marca o CHECKBOX individual.
         
-        IMPORTANTE: No Nexlog, o "Selecionar Tudo" NAO persiste entre filtros.
-        Mas o checkbox INDIVIDUAL de cada linha persiste. Entao o fluxo e:
-        1. Filtrar por AWB
-        2. Marcar o checkbox da linha
-        3. Limpar filtro e filtrar proximo AWB
-        4. Marcar checkbox
-        5. ... repete
-        6. No final, todos os checkboxes marcados ficam e pode liberar
+        REGRAS:
+        - So marca linhas com status "Retida" (exato)
+        - NAO marca: "Liberada", "Parcialmente liberada", "Retida parcialmente"
+        - Um AWB pode ter MULTIPLAS linhas (volumes) — marca TODAS com status "Retida"
+        - Checkboxes individuais PERSISTEM entre mudancas de filtro
 
         Args:
             awbs: Set de AWBs para tentar liberar
@@ -143,75 +140,87 @@ class NexlogLiberar:
                 logger.debug(f"AWB digitado: {awb}")
                 time.sleep(2)  # Tempo para a tabela filtrar
 
-                # 3. Verifica se a tabela tem resultados
-                try:
-                    linhas = self.driver.find_elements(By.XPATH,
-                        "//table[@id='RetentionList']//tbody//tr"
-                        " | //table//tbody//tr"
-                    )
-                    tem_resultado = False
-                    for linha in linhas:
-                        texto = linha.text.strip()
-                        if texto and "nenhum" not in texto.lower() and "empty" not in texto.lower():
-                            tem_resultado = True
-                            break
+                # 3. Busca todas as linhas da tabela filtrada
+                linhas = self.driver.find_elements(By.XPATH,
+                    "//table[@id='RetentionList']//tbody//tr"
+                    " | //table//tbody//tr"
+                )
 
-                    if not tem_resultado:
-                        resultado["ja_liberados"].append(awb)
-                        logger.info(f"AWB {awb}: nao encontrado (ja liberado/retirado)")
-                        continue
-                except Exception:
-                    pass
+                # Verifica se tem resultados
+                tem_resultado = False
+                for linha in linhas:
+                    texto = linha.text.strip()
+                    if texto and "nenhum" not in texto.lower() and "empty" not in texto.lower():
+                        tem_resultado = True
+                        break
 
-                # 4. Marca o checkbox da linha (individual, persiste entre filtros)
-                checkbox_marcado = False
-                try:
-                    # Busca checkbox na primeira linha visivel da tabela filtrada
-                    checkboxes = self.driver.find_elements(By.XPATH,
-                        "//table[@id='RetentionList']//tbody//tr//input[@type='checkbox']"
-                        " | //table//tbody//tr//input[@type='checkbox']"
-                    )
-                    for cb in checkboxes:
-                        try:
-                            if cb.is_displayed() and not cb.is_selected():
-                                try:
-                                    cb.click()
-                                except Exception:
-                                    self.driver.execute_script("arguments[0].click();", cb)
-                                checkbox_marcado = True
-                                break
-                            elif cb.is_displayed() and cb.is_selected():
-                                # Ja estava marcado
-                                checkbox_marcado = True
-                                break
-                        except Exception:
-                            continue
-                except Exception:
-                    pass
+                if not tem_resultado:
+                    resultado["ja_liberados"].append(awb)
+                    logger.info(f"AWB {awb}: nao encontrado (ja liberado/retirado)")
+                    continue
 
-                if checkbox_marcado:
-                    logger.info(f"AWB {awb}: checkbox marcado")
-                    resultado["selecionados"].append(awb)
-                else:
-                    # Fallback: tenta via td-check (classe comum de coluna de checkbox)
+                # 4. Para CADA linha visivel, verifica status e marca checkbox
+                # Um AWB pode ter multiplas linhas (volumes) — marca TODAS com status "Retida"
+                checkboxes_marcados = 0
+                linhas_puladas = 0
+
+                for linha in linhas:
                     try:
-                        td_check = self.driver.find_element(By.XPATH,
-                            "//table//tbody//tr//td[contains(@class,'td-check')]//input"
-                            " | //table//tbody//tr//td[1]//input[@type='checkbox']"
-                        )
-                        if td_check.is_displayed():
+                        if not linha.is_displayed():
+                            continue
+
+                        texto_linha = linha.text.upper().strip()
+                        if not texto_linha:
+                            continue
+
+                        # Classifica o status da linha
+                        # So marca se contem "RETIDA" E NAO contem "PARCIAL" ou "LIBERADA"
+                        eh_retida = "RETIDA" in texto_linha
+                        eh_parcial = "PARCIAL" in texto_linha
+                        eh_liberada = "LIBERADA" in texto_linha
+
+                        if eh_retida and not eh_parcial and not eh_liberada:
+                            # Status "Retida" — MARCA o checkbox
                             try:
-                                td_check.click()
-                            except Exception:
-                                self.driver.execute_script("arguments[0].click();", td_check)
-                            logger.info(f"AWB {awb}: checkbox marcado (fallback td-check)")
-                            resultado["selecionados"].append(awb)
+                                checkbox = linha.find_element(By.XPATH,
+                                    ".//input[@type='checkbox']"
+                                    " | .//td[contains(@class,'check')]//input"
+                                )
+                                if checkbox.is_displayed() and not checkbox.is_selected():
+                                    try:
+                                        checkbox.click()
+                                    except Exception:
+                                        self.driver.execute_script(
+                                            "arguments[0].click();", checkbox
+                                        )
+                                    checkboxes_marcados += 1
+                                    time.sleep(0.3)
+                                elif checkbox.is_selected():
+                                    checkboxes_marcados += 1  # Ja estava marcado
+                            except Exception as e:
+                                logger.debug(f"AWB {awb}: checkbox nao encontrado na linha: {e}")
                         else:
-                            resultado["erros"].append(awb)
-                            logger.error(f"AWB {awb}: checkbox nao encontrado/visivel")
-                    except Exception:
-                        resultado["erros"].append(awb)
-                        logger.error(f"AWB {awb}: checkbox nao encontrado")
+                            # Liberada, parcial, ou outro — NAO marca
+                            linhas_puladas += 1
+                            if eh_liberada:
+                                logger.debug(f"AWB {awb}: linha 'Liberada' - pulando")
+                            elif eh_parcial:
+                                logger.debug(f"AWB {awb}: linha parcial - pulando")
+
+                    except Exception as e:
+                        logger.debug(f"AWB {awb}: erro ao processar linha: {e}")
+
+                if checkboxes_marcados > 0:
+                    logger.info(f"AWB {awb}: {checkboxes_marcados} checkbox(es) marcado(s)"
+                              f"{f', {linhas_puladas} puladas' if linhas_puladas else ''}")
+                    resultado["selecionados"].append(awb)
+                elif linhas_puladas > 0:
+                    # Todas as linhas eram liberadas/parciais
+                    resultado["ja_liberados"].append(awb)
+                    logger.info(f"AWB {awb}: {linhas_puladas} linhas ja liberadas/parciais")
+                else:
+                    resultado["erros"].append(awb)
+                    logger.error(f"AWB {awb}: nenhum checkbox encontrado")
 
                 # Pausa entre AWBs
                 time.sleep(1)
