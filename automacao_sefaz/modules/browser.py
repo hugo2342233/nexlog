@@ -1,11 +1,12 @@
 """
-Modulo de login compartilhado no Nexlog.
+Modulo de login e navegacao compartilhada no Nexlog.
 Gerencia sessao do navegador de forma reutilizavel por todos os modulos.
-Usa Selenium (compativel com o setup atual do usuario).
 """
 
 import time
 import logging
+import os
+
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -29,12 +30,23 @@ class NexlogBrowser:
         self._logado = False
 
     def iniciar(self, headless: bool = False):
-        """Inicia o navegador Chrome."""
+        """Inicia o navegador Chrome com configuracoes para download."""
         options = webdriver.ChromeOptions()
         if headless:
             options.add_argument("--headless")
         options.add_argument("--start-maximized")
         options.add_argument("--disable-notifications")
+
+        # Configura pasta de downloads
+        pasta_downloads = config.pasta_downloads
+        os.makedirs(pasta_downloads, exist_ok=True)
+
+        prefs = {
+            "download.default_directory": pasta_downloads,
+            "download.prompt_for_download": False,
+            "plugins.always_open_pdf_externally": True,  # Baixa PDF ao inves de abrir
+        }
+        options.add_experimental_option("prefs", prefs)
 
         self.driver = webdriver.Chrome(options=options)
         self.wait = WebDriverWait(self.driver, config.timeout_padrao)
@@ -42,7 +54,7 @@ class NexlogBrowser:
         logger.info("Navegador iniciado")
 
     def login_nexlog(self, usuario: str = None, senha: str = None, base: str = None):
-        """Faz login no Nexlog. Usa credenciais do config se nao fornecidas."""
+        """Faz login no Nexlog."""
         usuario = usuario or config.nexlog.usuario
         senha = senha or config.nexlog.senha
         base = base or config.nexlog.base
@@ -82,7 +94,7 @@ class NexlogBrowser:
         # Tratar mensagem de sessao ativa
         self._tratar_sessao_ativa()
 
-        time.sleep(3)
+        time.sleep(4)
         self._logado = True
         logger.info(f"Login Nexlog realizado - base: {base}")
 
@@ -100,18 +112,24 @@ class NexlogBrowser:
             pass
 
     def busca_rapida(self, codigo: str):
-        """Usa o campo de busca rapida para pesquisar um codigo (CTe, AWB, etc)."""
+        """
+        Usa o campo de busca rapida (canto superior esquerdo) para pesquisar.
+        Digita o codigo e clica no icone 'alvo' (quickTracking).
+        """
         self._fechar_modais()
         time.sleep(1)
 
+        # Localiza campo pesquisa rapida
         campo = self.wait.until(
             EC.visibility_of_element_located((By.ID, "quickSearch"))
         )
         campo.click()
-        campo.clear()
+        campo.send_keys(Keys.CONTROL, "a")
+        campo.send_keys(Keys.BACKSPACE)
         time.sleep(0.3)
         campo.send_keys(codigo)
 
+        # Clica no icone alvo (quickTracking)
         botao = self.wait.until(
             EC.element_to_be_clickable((By.ID, "quickTracking-icon"))
         )
@@ -121,11 +139,9 @@ class NexlogBrowser:
     def _fechar_modais(self):
         """Fecha qualquer modal aberto que possa bloquear a interacao."""
         try:
-            # ESC para fechar modais
             ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
             time.sleep(0.5)
 
-            # Remove backdrops via JavaScript
             self.driver.execute_script("""
                 var backdrops = document.getElementsByClassName('modal-backdrop');
                 while(backdrops.length > 0){ backdrops[0].parentNode.removeChild(backdrops[0]); }
@@ -136,50 +152,57 @@ class NexlogBrowser:
         except Exception:
             pass
 
-    def obter_tipo_entrega(self) -> str:
-        """
-        Apos buscar um CTe, verifica o tipo de entrega na tela.
-        Retorna 'retira' ou 'domicilio' ou 'desconhecido'.
-        """
-        try:
-            # Busca o texto 'Local de entrega' na pagina
-            page_text = self.driver.page_source.upper()
+    def navegar_url(self, url: str):
+        """Navega diretamente para uma URL do Nexlog."""
+        self.driver.get(url)
+        time.sleep(3)
 
-            if "TECA" in page_text or "AEROPORTO" in page_text:
-                return "retira"
-            elif "ENTREGA DOMIC" in page_text:
-                return "domicilio"
-            else:
-                return "desconhecido"
-        except Exception:
-            return "desconhecido"
+    def navegar_operacoes_gerenciar_rotas(self):
+        """Navega para: Operacoes > Recebimento > Gerenciar rotas."""
+        self.navegar_url("https://golcargo.nexlog.com/Operations/Receiving")
+        time.sleep(2)
+        logger.info("Nexlog: Na pagina de Gerenciar rotas (Recebimento)")
 
-    def obter_awb_do_cte(self) -> str:
+    def navegar_vendas_conhecimento_lista(self):
+        """Navega para: Vendas > Conhecimento > Lista."""
+        self.navegar_url("https://golcargo.nexlog.com/Sales/TransportOrder/")
+        time.sleep(2)
+        logger.info("Nexlog: Na pagina de Conhecimento/Lista")
+
+    def navegar_vendas_retencao_lista(self):
+        """Navega para: Vendas > Retencao > Lista."""
+        self.navegar_url("https://golcargo.nexlog.com/Sales/Retention/")
+        time.sleep(2)
+        logger.info("Nexlog: Na pagina de Retencoes")
+
+    def aguardar_download(self, timeout: int = 60) -> str:
         """
-        Apos buscar um CTe, extrai o numero do AWB atrelado.
-        Retorna o numero do AWB ou string vazia se nao encontrar.
+        Aguarda um download finalizar e retorna o caminho do arquivo.
+        Detecta o arquivo mais recente na pasta de downloads.
         """
-        try:
-            # Tenta encontrar o campo AWB na tela de rastreio
-            # O AWB geralmente aparece na secao de detalhes do CTe
-            elementos = self.driver.find_elements(
-                By.XPATH,
-                "//td[contains(text(),'AWB') or contains(text(),'awb')]"
-                "/following-sibling::td"
-            )
-            if elementos:
-                return elementos[0].text.strip()
+        pasta = config.pasta_downloads
+        tempo_inicial = time.time()
+        arquivo_antes = set(os.listdir(pasta)) if os.path.exists(pasta) else set()
 
-            # Alternativa: buscar por padrao numerico de AWB (ex: 127XXXXXXX)
-            import re
-            page_text = self.driver.page_source
-            match = re.search(r'\b(127\d{7,})\b', page_text)
-            if match:
-                return match.group(1)
+        while time.time() - tempo_inicial < timeout:
+            time.sleep(2)
+            arquivos_atuais = set(os.listdir(pasta)) if os.path.exists(pasta) else set()
+            novos = arquivos_atuais - arquivo_antes
 
-            return ""
-        except Exception:
-            return ""
+            # Ignora arquivos temporarios (.crdownload, .tmp)
+            novos_completos = [
+                f for f in novos
+                if not f.endswith('.crdownload') and not f.endswith('.tmp')
+            ]
+
+            if novos_completos:
+                arquivo = novos_completos[0]
+                caminho = os.path.join(pasta, arquivo)
+                logger.info(f"Download concluido: {arquivo}")
+                return caminho
+
+        logger.warning("Timeout aguardando download")
+        return ""
 
     def fechar(self):
         """Fecha o navegador."""

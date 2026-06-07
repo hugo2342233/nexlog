@@ -1,24 +1,20 @@
 """
-Modulo para operacoes de CTe no Nexlog:
-- Buscar CTe e extrair AWB
-- Verificar tipo de entrega (RETIRA vs DOMICILIO)
-- Adicionar comentario critico
+Modulo para operacoes com CTe no Nexlog:
+- Buscar CTe na aba 'Por referencia' para encontrar o AWB
+- Adicionar comentario critico no AWB via busca rapida
 """
 
 import time
 import logging
-from typing import Optional, List
+import re
+from typing import Optional, List, Dict
 
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 
-from models.termo import (
-    TermoApreensao,
-    CTeProcesado,
-    TipoEntrega,
-)
+from models.termo import TermoApreensao, ConsultaMDFe
 from modules.browser import NexlogBrowser
 
 logger = logging.getLogger(__name__)
@@ -32,242 +28,271 @@ class NexlogCTeOperacoes:
         self.driver = browser.driver
         self.wait = browser.wait
 
-    def consultar_cte(self, numero_cte: str) -> CTeProcesado:
+    def buscar_awb_do_cte(self, numero_cte: str) -> str:
         """
-        Consulta um CTe no Nexlog e extrai informacoes.
-        Retorna um CTeProcesado com AWB e tipo de entrega.
-        """
-        cte_proc = CTeProcesado(numero_cte=numero_cte)
+        Busca o AWB associado a um CTe.
+        Fluxo: Vendas > Conhecimento > Lista > Aba 'Por referencia'
+               > Campo 'Numero integracao' > Pesquisar > Le 'N. documento'
 
+        Returns:
+            Numero do AWB (127...) ou "" se nao encontrar
+        """
         try:
-            # Busca o CTe
-            self.browser.busca_rapida(numero_cte)
-            time.sleep(3)
-
-            # Extrai AWB
-            awb = self._extrair_awb()
-            cte_proc.awb = awb
-
-            # Verifica tipo de entrega
-            tipo = self._verificar_tipo_entrega()
-            cte_proc.tipo_entrega = tipo
-
-            logger.info(
-                f"CTe {numero_cte}: AWB={awb or 'N/A'} | "
-                f"Entrega={tipo.value}"
+            # Clica na aba "Por referencia"
+            aba_referencia = self.wait.until(
+                EC.element_to_be_clickable((By.XPATH,
+                    "//a[contains(.,'Por refer') or contains(.,'por refer')]"
+                    " | //a[text()='Por referência']"
+                ))
             )
+            aba_referencia.click()
+            time.sleep(2)
 
+            # Verifica se precisa clicar no icone de filtro primeiro
+            try:
+                filtro_btn = self.driver.find_element(By.XPATH,
+                    "//button[contains(@class,'filter')] | "
+                    "//*[contains(@class,'fa-filter')]/.."
+                )
+                if filtro_btn.is_displayed():
+                    filtro_btn.click()
+                    time.sleep(1)
+            except Exception:
+                pass
+
+            # Preenche campo "Numero integracao"
+            # No print, e o penultimo campo na segunda linha de filtros
+            campo_integracao = self.wait.until(
+                EC.element_to_be_clickable((By.XPATH,
+                    "//input[contains(@id,'Integration') or contains(@name,'Integration') "
+                    "or contains(@id,'integration')]"
+                    " | //label[contains(.,'integra')]//following::input[1]"
+                    " | //input[contains(@placeholder,'integra')]"
+                ))
+            )
+            campo_integracao.click()
+            campo_integracao.send_keys(Keys.CONTROL, "a")
+            campo_integracao.send_keys(Keys.BACKSPACE)
+            campo_integracao.send_keys(numero_cte)
+            time.sleep(0.5)
+
+            # Clica pesquisar
+            botao_pesquisar = self.wait.until(
+                EC.element_to_be_clickable((By.XPATH,
+                    "//button[contains(.,'Pesquisar')]"
+                ))
+            )
+            botao_pesquisar.click()
+            time.sleep(4)
+
+            # Le o AWB da coluna "N. documento" na tabela de resultados
+            awb = self._ler_awb_resultado()
+
+            if awb:
+                logger.info(f"CTe {numero_cte} -> AWB {awb}")
+            else:
+                logger.warning(f"CTe {numero_cte}: AWB nao encontrado")
+
+            return awb
+
+        except TimeoutException as e:
+            logger.error(f"Timeout ao buscar AWB do CTe {numero_cte}: {e}")
+            return ""
         except Exception as e:
-            logger.error(f"Erro ao consultar CTe {numero_cte}: {e}")
+            logger.error(f"Erro ao buscar AWB do CTe {numero_cte}: {e}")
+            return ""
 
-        return cte_proc
-
-    def _extrair_awb(self) -> str:
-        """Extrai o numero do AWB da tela de rastreio do CTe."""
+    def _ler_awb_resultado(self) -> str:
+        """Le o AWB (N. documento) da primeira linha da tabela de resultados."""
         try:
-            # Tenta diversas abordagens para encontrar o AWB
-            import re
+            # Verifica se tem resultados
+            try:
+                self.driver.find_element(By.XPATH,
+                    "//*[contains(.,'Nenhum registro')]"
+                )
+                return ""
+            except Exception:
+                pass
 
-            # Abordagem 1: Buscar em tabelas/campos da tela
-            elementos_awb = self.driver.find_elements(
-                By.XPATH,
-                "//*[contains(text(),'AWB') or contains(text(),'Conhecimento')]"
-                "/ancestor::tr//td[2] | "
-                "//*[contains(text(),'AWB')]/following-sibling::*"
+            # Busca na tabela de resultados a coluna N. documento
+            # O AWB comeca com 127
+            celulas = self.driver.find_elements(By.XPATH,
+                "//table//tbody//tr[1]//td"
             )
-            for elem in elementos_awb:
-                texto = elem.text.strip()
-                if texto and texto.isdigit() and len(texto) >= 8:
+            for celula in celulas:
+                texto = celula.text.strip()
+                if texto.startswith("127") and len(texto) >= 10 and texto.isdigit():
                     return texto
 
-            # Abordagem 2: Regex no conteudo da pagina
-            # AWBs da Gollog comecam com 127
-            page_source = self.driver.page_source
-            matches = re.findall(r'\b(127\d{7,})\b', page_source)
-            if matches:
-                # Retorna o primeiro que nao e o proprio CTe
-                for m in matches:
-                    return m
-
-            # Abordagem 3: Buscar campo especifico
-            try:
-                campo_awb = self.driver.find_element(
-                    By.XPATH,
-                    "//label[contains(text(),'AWB') or contains(text(),'Conhecimento')]"
-                    "/following::span[1] | "
-                    "//label[contains(text(),'AWB')]/following::input[1]"
-                )
-                valor = campo_awb.text.strip() or campo_awb.get_attribute("value") or ""
-                if valor:
-                    return valor
-            except Exception:
-                pass
+            # Alternativa: busca por regex na pagina
+            page_text = self.driver.find_element(
+                By.XPATH, "//table//tbody"
+            ).text
+            match = re.search(r'\b(127\d{7,})\b', page_text)
+            if match:
+                return match.group(1)
 
             return ""
-
-        except Exception as e:
-            logger.warning(f"Nao conseguiu extrair AWB: {e}")
-            return ""
-
-    def _verificar_tipo_entrega(self) -> TipoEntrega:
-        """
-        Verifica o tipo de entrega do CTe atual.
-        'Teca / Aeroporto' = RETIRA
-        'Entrega Domicilio' = DOMICILIO
-        """
-        try:
-            page_text = self.driver.find_element(By.TAG_NAME, "body").text.upper()
-
-            # Busca especifica pelo campo "Local de entrega"
-            if "TECA" in page_text or "AEROPORTO" in page_text:
-                return TipoEntrega.RETIRA
-            elif "ENTREGA DOMIC" in page_text or "DOMICILIO" in page_text or "DOMICÍLIO" in page_text:
-                return TipoEntrega.DOMICILIO
-
-            # Tenta buscar mais especificamente
-            try:
-                elem_entrega = self.driver.find_element(
-                    By.XPATH,
-                    "//*[contains(text(),'Local de entrega')]/following::*[1]"
-                )
-                texto_entrega = elem_entrega.text.upper()
-                if "TECA" in texto_entrega or "AEROPORTO" in texto_entrega:
-                    return TipoEntrega.RETIRA
-                elif "DOMIC" in texto_entrega:
-                    return TipoEntrega.DOMICILIO
-            except Exception:
-                pass
-
-            return TipoEntrega.DESCONHECIDO
 
         except Exception:
-            return TipoEntrega.DESCONHECIDO
+            return ""
 
     def adicionar_comentario_critico(self, awb: str, texto_comentario: str) -> bool:
         """
         Adiciona um comentario critico em um AWB no Nexlog.
-
         Fluxo:
-        1. Busca o AWB no campo de busca rapida
-        2. Clica no botao "Adicionar comentario"
-        3. Marca checkbox "Critico"
-        4. Digita o texto do comentario
-        5. Clica em "Adicionar comentario" (confirmar)
+        1. Cola AWB no campo pesquisa rapida > clica no alvo
+        2. Abre tela de Rastreio
+        3. Clica "Adicionar comentarios"
+        4. Digita texto no campo Comentario
+        5. Marca checkbox "Critico?"
+        6. Clica botao "Adicionar"
+        7. Fecha modal Comentarios
+        8. Fecha modal Rastreio
 
         Returns:
-            True se adicionou com sucesso, False caso contrario
+            True se adicionou com sucesso
         """
         if not awb:
             logger.warning("AWB vazio - nao pode adicionar comentario")
             return False
 
         try:
-            # 1. Busca o AWB
+            # 1. Busca rapida pelo AWB
             self.browser.busca_rapida(awb)
             time.sleep(3)
 
-            # 2. Clica no botao "Adicionar comentario"
-            botao_comentario = self.wait.until(
-                EC.element_to_be_clickable((
-                    By.XPATH,
-                    "//button[contains(text(),'Adicionar coment') or "
-                    "contains(text(),'adicionar coment') or "
-                    "contains(@title,'coment') or "
-                    "contains(@class,'comment')]"
-                    " | //a[contains(text(),'Adicionar coment')]"
+            # 2. Clica em "Adicionar comentarios" (link no canto superior direito)
+            link_comentario = self.wait.until(
+                EC.element_to_be_clickable((By.XPATH,
+                    "//a[contains(.,'Adicionar coment')]"
+                    " | //*[contains(.,'Adicionar coment') and (self::a or self::button)]"
                 ))
             )
-            botao_comentario.click()
-            time.sleep(2)
+            link_comentario.click()
+            time.sleep(3)
 
-            # 3. Marca checkbox "Critico"
+            # 3. Localiza o campo de texto "Comentario"
+            campo_comentario = self.wait.until(
+                EC.element_to_be_clickable((By.XPATH,
+                    "//textarea"
+                    " | //div[contains(@class,'modal')]//textarea"
+                ))
+            )
+            campo_comentario.clear()
+            campo_comentario.send_keys(texto_comentario)
+            time.sleep(0.5)
+
+            # 4. Marca checkbox "Critico?"
             checkbox_critico = self.wait.until(
-                EC.element_to_be_clickable((
-                    By.XPATH,
-                    "//input[@type='checkbox'][contains(following-sibling::*,'r') "
-                    "or contains(@id,'critic') or contains(@id,'Critic') "
-                    "or contains(@name,'critic') or contains(@name,'Critic')]"
-                    " | //label[contains(text(),'r')]//input[@type='checkbox']"
-                    " | //input[contains(@id,'rit') or contains(@id,'ritico')]"
+                EC.presence_of_element_located((By.XPATH,
+                    "//input[@type='checkbox'][following-sibling::*[contains(.,'tico')] "
+                    "or ancestor::label[contains(.,'tico')]]"
+                    " | //label[contains(.,'tico')]//input[@type='checkbox']"
+                    " | //input[@type='checkbox'][contains(@id,'ritico') "
+                    "or contains(@id,'ritical') or contains(@name,'ritico')]"
                 ))
             )
             if not checkbox_critico.is_selected():
-                checkbox_critico.click()
+                # Tenta clicar diretamente ou via JavaScript
+                try:
+                    checkbox_critico.click()
+                except Exception:
+                    self.driver.execute_script("arguments[0].click();", checkbox_critico)
             time.sleep(0.5)
 
-            # 4. Digita o texto do comentario
-            campo_texto = self.wait.until(
-                EC.element_to_be_clickable((
-                    By.XPATH,
-                    "//textarea | //input[@type='text'][contains(@placeholder,'oment')]"
+            # 5. Clica botao "Adicionar" (azul com +)
+            botao_adicionar = self.wait.until(
+                EC.element_to_be_clickable((By.XPATH,
+                    "//button[contains(.,'Adicionar')]"
+                    " | //button[contains(@class,'btn-primary') and contains(@class,'add')]"
                 ))
             )
-            campo_texto.clear()
-            campo_texto.send_keys(texto_comentario)
-            time.sleep(0.5)
-
-            # 5. Clica em confirmar/adicionar
-            botao_confirmar = self.wait.until(
-                EC.element_to_be_clickable((
-                    By.XPATH,
-                    "//button[contains(text(),'Adicionar') and contains(@class,'btn')]"
-                    " | //button[contains(text(),'Salvar')]"
-                    " | //button[contains(text(),'Confirmar')]"
-                    " | //button[@type='submit']"
-                ))
-            )
-            botao_confirmar.click()
+            botao_adicionar.click()
             time.sleep(2)
+
+            # 6. Fecha modal Comentarios (botao "Fechar")
+            try:
+                botao_fechar_comentario = self.wait.until(
+                    EC.element_to_be_clickable((By.XPATH,
+                        "(//button[contains(.,'Fechar')])[last()]"
+                    ))
+                )
+                botao_fechar_comentario.click()
+                time.sleep(1)
+            except Exception:
+                pass
+
+            # 7. Fecha modal Rastreio
+            try:
+                # Tenta fechar com X ou botao Fechar
+                botao_fechar_rastreio = self.driver.find_element(By.XPATH,
+                    "//div[contains(@class,'modal')]//button[contains(@class,'close')]"
+                    " | //div[contains(@class,'modal')]//button[contains(.,'Fechar')]"
+                )
+                botao_fechar_rastreio.click()
+                time.sleep(1)
+            except Exception:
+                self.browser._fechar_modais()
 
             logger.info(f"Comentario adicionado: AWB {awb} -> '{texto_comentario}'")
             return True
 
         except TimeoutException as e:
             logger.error(f"Timeout ao adicionar comentario no AWB {awb}: {e}")
+            self.browser._fechar_modais()
             return False
         except Exception as e:
             logger.error(f"Erro ao adicionar comentario no AWB {awb}: {e}")
+            self.browser._fechar_modais()
             return False
 
-    def processar_termos(self, termos: List[TermoApreensao]) -> List[CTeProcesado]:
+    def processar_termos_voo(self, consulta: ConsultaMDFe) -> Dict[str, str]:
         """
-        Processa uma lista de termos:
-        - Consulta cada CTe no Nexlog
-        - Extrai AWB e tipo de entrega
-        - Adiciona comentario critico nos retidos
-        - Retorna lista de CTes processados
+        Processa todos os termos de um voo:
+        - Para cada CTe com termo, busca o AWB
+        - Adiciona comentario critico no AWB
+        - Agrupa termos do mesmo CTe em um unico comentario
 
         Returns:
-            Lista de CTeProcesado com resultados
+            Dict mapeando CTe -> AWB (para uso posterior na liberacao)
         """
-        processados = []
+        mapa_cte_awb = {}
+        ctes_processados = set()
 
-        for termo in termos:
-            if not termo.cte:
-                logger.warning(f"Termo {termo.numero} sem CTe - pulando")
+        # Agrupa termos por CTe (pode ter multiplos termos pro mesmo CTe)
+        ctes_unicos = list(set(consulta.ctes_retidos))
+
+        # Navega para a pagina de lista de conhecimentos
+        self.browser.navegar_vendas_conhecimento_lista()
+        time.sleep(2)
+
+        for cte in ctes_unicos:
+            if cte in ctes_processados:
                 continue
 
-            logger.info(f"Processando CTe {termo.cte} (Termo {termo.numero})")
+            logger.info(f"Processando CTe {cte}...")
 
-            # Consulta CTe para obter AWB e tipo entrega
-            cte_proc = self.consultar_cte(termo.cte)
-            cte_proc.termo = termo
+            # 1. Busca AWB do CTe
+            awb = self.buscar_awb_do_cte(cte)
+            if not awb:
+                logger.warning(f"CTe {cte}: AWB nao encontrado - pulando")
+                continue
 
-            # Se encontrou AWB, adiciona comentario critico
-            if cte_proc.awb:
-                termo.awb = cte_proc.awb
-                sucesso = self.adicionar_comentario_critico(
-                    awb=cte_proc.awb,
-                    texto_comentario=termo.comentario_nexlog
-                )
-                cte_proc.comentario_adicionado = sucesso
+            mapa_cte_awb[cte] = awb
+
+            # 2. Gera comentario (com todos os termos deste CTe)
+            comentario = consulta.comentario_para_cte(cte)
+
+            # 3. Adiciona comentario critico no AWB
+            sucesso = self.adicionar_comentario_critico(awb, comentario)
+
+            if sucesso:
+                logger.info(f"  OK: AWB {awb} <- '{comentario}'")
             else:
-                logger.warning(
-                    f"CTe {termo.cte}: AWB nao encontrado - "
-                    "comentario nao adicionado"
-                )
+                logger.error(f"  FALHA: AWB {awb} <- '{comentario}'")
 
-            processados.append(cte_proc)
-            time.sleep(1)  # Pausa entre operacoes
+            ctes_processados.add(cte)
+            time.sleep(1)
 
-        return processados
+        return mapa_cte_awb

@@ -1,16 +1,20 @@
 """
-Parser do relatorio da SEFAZ-AL.
-Extrai termos de apreensao, CTes, e informacoes estruturadas
-do texto gerado pela consulta de Analise MDF-e.
+Parser do relatorio da SEFAZ-AL e do manifesto de despacho (PDF).
+- Extrai termos de apreensao, CTes e informacoes do relatorio SEFAZ
+- Extrai AWBs do manifesto separando RETIRA e ENTREGA
 """
 
 import re
 import logging
-from typing import List, Optional
+from typing import List, Set
+from pathlib import Path
+
+import pdfplumber
 
 from models.termo import (
     TermoApreensao,
     ConsultaMDFe,
+    ManifestoVoo,
     TipoFielDepositario,
     SituacaoTermo,
     StatusMDFe,
@@ -18,6 +22,10 @@ from models.termo import (
 
 logger = logging.getLogger(__name__)
 
+
+# ============================================================
+# PARSER DO RELATORIO SEFAZ (texto do PDF ou da pagina web)
+# ============================================================
 
 def parsear_situacao(texto: str) -> SituacaoTermo:
     """Converte texto de situacao para enum."""
@@ -71,73 +79,9 @@ def extrair_total_termos(texto: str) -> int:
 def extrair_termos(texto: str) -> List[TermoApreensao]:
     """
     Extrai todos os termos de apreensao do texto do relatorio.
-    Funciona para o formato padrao da SEFAZ-AL.
+    Usa abordagem por linhas para maior robustez.
     """
     termos = []
-
-    # Detectar secoes de tipo de fiel depositario
-    # Dividir o texto em blocos por tipo
-    secoes = re.split(
-        r'(Transportadora Fiel Deposit[aá]rio|Destinat[aá]rio Fiel Deposit[aá]rio)',
-        texto,
-        flags=re.IGNORECASE
-    )
-
-    tipo_atual = TipoFielDepositario.TRANSPORTADORA
-
-    for i, secao in enumerate(secoes):
-        secao_upper = secao.strip().upper()
-
-        # Identifica tipo da secao
-        if "TRANSPORTADORA FIEL" in secao_upper:
-            tipo_atual = TipoFielDepositario.TRANSPORTADORA
-            continue
-        elif "DESTINAT" in secao_upper and "FIEL" in secao_upper:
-            tipo_atual = TipoFielDepositario.DESTINATARIO
-            continue
-
-        # Busca termos no bloco atual
-        # Padrao: numero do termo (6-7 digitos), seguido de situacao, data, etc.
-        padrao_termo = re.compile(
-            r'(\d{6,8})\s+'          # Numero do termo
-            r'(Pendente|Regularizado|Liberado)\s+'  # Situacao
-            r'(\d{2}/\d{2}/\d{4})\s+'  # Data emissao
-            r'(.+?)\s+'              # Fiel depositario nome
-            r'(\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})\s*'  # CNPJ
-            r'(?:NF-?e\s*(\d+))?\s*'  # NF-e (opcional)
-            r'(?:CT-?e\s*(\d+))?',    # CT-e (opcional)
-            re.IGNORECASE
-        )
-
-        for match in padrao_termo.finditer(secao):
-            termo = TermoApreensao(
-                numero=match.group(1),
-                situacao=parsear_situacao(match.group(2)),
-                data_emissao=match.group(3),
-                fiel_depositario_nome=match.group(4).strip(),
-                fiel_depositario_cnpj=match.group(5),
-                tipo_fiel=tipo_atual,
-                nfe=match.group(6) or "",
-                cte=match.group(7) or "",
-            )
-            termos.append(termo)
-            logger.debug(f"Termo encontrado: {termo.numero} - CTe: {termo.cte}")
-
-    # Se o regex complexo nao pegou, tenta uma abordagem mais simples
-    if not termos:
-        termos = _extrair_termos_simples(texto)
-
-    return termos
-
-
-def _extrair_termos_simples(texto: str) -> List[TermoApreensao]:
-    """
-    Abordagem alternativa mais flexivel para extrair termos.
-    Usa padroes separados para cada campo.
-    """
-    termos = []
-
-    # Encontra todos os numeros de termo (6-8 digitos que aparecem no contexto correto)
     linhas = texto.split('\n')
     tipo_atual = TipoFielDepositario.TRANSPORTADORA
 
@@ -145,14 +89,15 @@ def _extrair_termos_simples(texto: str) -> List[TermoApreensao]:
         linha_upper = linha.upper().strip()
 
         # Detecta mudanca de secao
-        if "TRANSPORTADORA FIEL" in linha_upper:
+        if "TRANSPORTADORA FIEL" in linha_upper or "TRANSPORTADORA FIEL DEPOSIT" in linha_upper:
             tipo_atual = TipoFielDepositario.TRANSPORTADORA
             continue
-        elif "DESTINAT" in linha_upper and "FIEL" in linha_upper:
+        elif ("DESTINAT" in linha_upper and "FIEL" in linha_upper) or \
+             "DESTINATÁRIO FIEL" in linha_upper:
             tipo_atual = TipoFielDepositario.DESTINATARIO
             continue
 
-        # Busca numero de termo + CTe na mesma linha ou proximas
+        # Busca termos: numero de 6-8 digitos + CTe na mesma linha
         match_termo = re.search(r'\b(\d{7})\b', linha)
         match_cte = re.search(r'CT-?e\s*(\d+)', linha, re.IGNORECASE)
         match_nfe = re.search(r'NF-?e\s*(\d+)', linha, re.IGNORECASE)
@@ -160,13 +105,71 @@ def _extrair_termos_simples(texto: str) -> List[TermoApreensao]:
         match_situacao = re.search(r'(Pendente|Regularizado|Liberado)', linha, re.IGNORECASE)
 
         if match_termo and (match_cte or match_nfe):
+            # Verifica se o numero do termo nao e na verdade um CTe/NF-e
+            num_termo = match_termo.group(1)
+            num_cte = match_cte.group(1) if match_cte else ""
+            num_nfe = match_nfe.group(1) if match_nfe else ""
+
+            # Pula se o "termo" e igual ao CTe ou NF-e
+            if num_termo == num_cte or num_termo == num_nfe:
+                continue
+
             termo = TermoApreensao(
-                numero=match_termo.group(1),
+                numero=num_termo,
                 situacao=parsear_situacao(match_situacao.group(1)) if match_situacao else SituacaoTermo.DESCONHECIDO,
                 data_emissao=match_data.group(1) if match_data else "",
                 tipo_fiel=tipo_atual,
-                nfe=match_nfe.group(1) if match_nfe else "",
-                cte=match_cte.group(1) if match_cte else "",
+                nfe=num_nfe,
+                cte=num_cte,
+            )
+            termos.append(termo)
+            logger.debug(f"Termo encontrado: {termo.numero} - CTe: {termo.cte}")
+
+    # Tenta regex mais complexo se nao encontrou nada
+    if not termos:
+        termos = _extrair_termos_regex_complexo(texto)
+
+    return termos
+
+
+def _extrair_termos_regex_complexo(texto: str) -> List[TermoApreensao]:
+    """Abordagem com regex complexo para formatos mais estruturados."""
+    termos = []
+    tipo_atual = TipoFielDepositario.TRANSPORTADORA
+
+    # Divide por secoes
+    secoes = re.split(
+        r'(Transportadora Fiel Deposit[aá]rio|Destinat[aá]rio Fiel Deposit[aá]rio)',
+        texto, flags=re.IGNORECASE
+    )
+
+    for secao in secoes:
+        secao_upper = secao.strip().upper()
+        if "TRANSPORTADORA FIEL" in secao_upper:
+            tipo_atual = TipoFielDepositario.TRANSPORTADORA
+            continue
+        elif "DESTINAT" in secao_upper and "FIEL" in secao_upper:
+            tipo_atual = TipoFielDepositario.DESTINATARIO
+            continue
+
+        # Padrao completo
+        padrao = re.compile(
+            r'(\d{6,8})\s+'
+            r'(Pendente|Regularizado|Liberado).*?'
+            r'(\d{2}/\d{2}/\d{4}).*?'
+            r'(?:NF-?e\s*(\d+))?\s*'
+            r'(?:CT-?e\s*(\d+))?',
+            re.IGNORECASE | re.DOTALL
+        )
+
+        for match in padrao.finditer(secao):
+            termo = TermoApreensao(
+                numero=match.group(1),
+                situacao=parsear_situacao(match.group(2)),
+                data_emissao=match.group(3),
+                tipo_fiel=tipo_atual,
+                nfe=match.group(4) or "",
+                cte=match.group(5) or "",
             )
             termos.append(termo)
 
@@ -175,8 +178,8 @@ def _extrair_termos_simples(texto: str) -> List[TermoApreensao]:
 
 def parsear_relatorio_sefaz(texto: str) -> ConsultaMDFe:
     """
-    Parseia o texto completo do relatorio da SEFAZ e retorna
-    um objeto ConsultaMDFe com todos os termos extraidos.
+    Parseia o texto completo do relatorio da SEFAZ.
+    Funciona tanto com texto extraido da pagina web quanto do PDF.
     """
     chave = extrair_chave_mdfe(texto)
     numero_mdfe = extrair_numero_mdfe(texto)
@@ -190,10 +193,12 @@ def parsear_relatorio_sefaz(texto: str) -> ConsultaMDFe:
 
     # Extrair emitente
     match_emitente = re.search(r'EMITENTE\s+(.+)', texto)
+    if not match_emitente:
+        match_emitente = re.search(r'RAZ[ÃA]O SOCIAL[:\s]+(.+)', texto, re.IGNORECASE)
     emitente = match_emitente.group(1).strip() if match_emitente else ""
 
     # Extrair CNPJ
-    match_cnpj = re.search(r'CNPJ\s+([\d./-]+)', texto)
+    match_cnpj = re.search(r'CNPJ[:\s]+([\d./-]+)', texto)
     cnpj = match_cnpj.group(1).strip() if match_cnpj else ""
 
     consulta = ConsultaMDFe(
@@ -203,7 +208,7 @@ def parsear_relatorio_sefaz(texto: str) -> ConsultaMDFe:
         emitente=emitente,
         cnpj_emitente=cnpj,
         status=status,
-        total_termos=total_termos,
+        total_termos=total_termos if total_termos > 0 else len(termos),
         termos=termos,
     )
 
@@ -216,6 +221,156 @@ def parsear_relatorio_sefaz(texto: str) -> ConsultaMDFe:
     return consulta
 
 
-def parsear_multiplos_relatorios(textos: List[str]) -> List[ConsultaMDFe]:
-    """Parseia multiplos relatorios de uma vez."""
-    return [parsear_relatorio_sefaz(texto) for texto in textos]
+def parsear_relatorio_pdf(caminho_pdf: str) -> ConsultaMDFe:
+    """
+    Parseia um PDF de relatorio da SEFAZ (baixado do email ou do site).
+    Extrai texto de todas as paginas e passa pro parser de texto.
+    """
+    texto_completo = ""
+    try:
+        with pdfplumber.open(caminho_pdf) as pdf:
+            for page in pdf.pages:
+                texto_pagina = page.extract_text() or ""
+                texto_completo += texto_pagina + "\n"
+    except Exception as e:
+        logger.error(f"Erro ao ler PDF do relatorio: {e}")
+        return ConsultaMDFe()
+
+    return parsear_relatorio_sefaz(texto_completo)
+
+
+# ============================================================
+# PARSER DO MANIFESTO DE DESPACHO (PDF do Nexlog)
+# ============================================================
+
+def parsear_manifesto_pdf(caminho_pdf: str) -> ManifestoVoo:
+    """
+    Parseia o PDF do manifesto de despacho do Nexlog.
+    Extrai AWBs separando por RETIRA e ENTREGA.
+
+    Regra importante: uma secao so acaba quando encontra outra secao,
+    mesmo que mude de pagina. Os AWBs continuam na secao anterior
+    ate encontrar um novo cabecalho "Produto: ... - RETIRA/ENTREGA".
+    """
+    manifesto = ManifestoVoo()
+    texto_completo = ""
+
+    try:
+        with pdfplumber.open(caminho_pdf) as pdf:
+            for page in pdf.pages:
+                texto_pagina = page.extract_text() or ""
+                texto_completo += texto_pagina + "\n"
+    except Exception as e:
+        logger.error(f"Erro ao ler PDF do manifesto: {e}")
+        return manifesto
+
+    # Extrai info do cabecalho
+    match_manifesto = re.search(r'N\.?\s*[º°o]\s*[:.]?\s*(\d+)', texto_completo)
+    if match_manifesto:
+        manifesto.numero_manifesto = match_manifesto.group(1)
+
+    match_voo = re.search(r'N[uú]mero\s*V[oô]o[:.]?\s*(G3\s*\d+)', texto_completo, re.IGNORECASE)
+    if match_voo:
+        manifesto.numero_voo = match_voo.group(1)
+
+    match_data = re.search(r'Data\s*V[oô]o[:.]?\s*(\d{2}/\d{2}/\d{4})', texto_completo, re.IGNORECASE)
+    if match_data:
+        manifesto.data_voo = match_data.group(1)
+
+    match_origem = re.search(r'Origem[:.]?\s*(\w{3})', texto_completo, re.IGNORECASE)
+    if match_origem:
+        manifesto.origem = match_origem.group(1)
+
+    match_destino = re.search(r'Destino[:.]?\s*(\w{3})', texto_completo, re.IGNORECASE)
+    if match_destino:
+        manifesto.destino = match_destino.group(1)
+
+    # Extrai AWBs separando por secao RETIRA / ENTREGA
+    # A secao e definida pelo cabecalho "Produto: XXXXX - RETIRA" ou "Produto: XXXXX - ENTREGA"
+    tipo_secao_atual = None  # None = antes da primeira secao
+
+    linhas = texto_completo.split('\n')
+    for linha in linhas:
+        linha_upper = linha.upper().strip()
+
+        # Detecta cabecalhos de secao
+        # Padroes: "Produto: TARIFARIO SBY - RETIRA", "Produto: E-GOLLOG - ENTREGA"
+        # Tambem: "URGENTE FRACIONADO - RETIRA", etc.
+        if "- RETIRA" in linha_upper and ("PRODUTO" in linha_upper or "TOTAL" not in linha_upper):
+            tipo_secao_atual = "RETIRA"
+            continue
+        elif "- ENTREGA" in linha_upper and ("PRODUTO" in linha_upper or "TOTAL" not in linha_upper):
+            tipo_secao_atual = "ENTREGA"
+            continue
+
+        # Pula linhas de cabecalho/total
+        if "TOTAL" in linha_upper and "PRODUTO" in linha_upper:
+            continue
+        if "DOC. F" in linha_upper or "DOC.F" in linha_upper:
+            continue
+
+        # Busca AWBs (começam com 127 e tem pelo menos 10 digitos)
+        if tipo_secao_atual:
+            matches = re.findall(r'\b(127\d{7,})\b', linha)
+            for awb in matches:
+                if tipo_secao_atual == "RETIRA":
+                    manifesto.awbs_retira.add(awb)
+                else:
+                    manifesto.awbs_entrega.add(awb)
+
+    logger.info(
+        f"Manifesto parseado: Voo {manifesto.numero_voo} | "
+        f"RETIRA: {len(manifesto.awbs_retira)} AWBs | "
+        f"ENTREGA: {len(manifesto.awbs_entrega)} AWBs"
+    )
+
+    return manifesto
+
+
+# ============================================================
+# DETECÇAO DE RESPOSTA DO EMAIL DA SEFAZ
+# ============================================================
+
+def detectar_resposta_email(texto_email: str) -> str:
+    """
+    Analisa o texto do email de resposta da SEFAZ.
+    Retorna: "com_termos", "sem_termos", ou "indefinido"
+    """
+    texto_upper = texto_email.upper()
+
+    # Indicadores de SEM termos (voo liberado)
+    indicadores_sem_termos = [
+        "SEM RETEN",
+        "SEM PEND",
+        "LIBERADO",
+        "NAO HOUVE RETEN",
+        "NÃO HOUVE RETEN",
+        "SEM TERMOS",
+        "NENHUM TERMO",
+        "SEM IRREGULARIDADE",
+        "NENHUMA IRREGULARIDADE",
+        "REGULAR",
+    ]
+
+    # Indicadores de COM termos
+    indicadores_com_termos = [
+        "RELAT" + chr(211) + "RIO ANEXO",  # RELATÓRIO ANEXO
+        "RELATÓRIO ANEXO",
+        "RELATORIO ANEXO",
+        "GERADO O RELAT",
+        "TERMO DE APREEN",
+        "COM PEND",
+        "RETEN" + chr(199) + chr(195) + "O",  # RETENÇÃO
+        "RETENCAO",
+        "RETENÇÃO",
+    ]
+
+    for indicador in indicadores_sem_termos:
+        if indicador in texto_upper:
+            return "sem_termos"
+
+    for indicador in indicadores_com_termos:
+        if indicador in texto_upper:
+            return "com_termos"
+
+    return "indefinido"
