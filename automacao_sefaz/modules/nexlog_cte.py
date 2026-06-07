@@ -153,43 +153,50 @@ class NexlogCTeOperacoes:
     def _tentar_abrir_filtro(self) -> bool:
         """
         Clica no botao de filtro para mostrar os campos.
-        O botao e um icone: <i class="fal fa-filter"></i>
-        Usa JavaScript puro para encontrar e clicar.
+        HTML exato:
+        <button class="toogleFilter btn btn-default" type="button">
+            <i class="fal fa-filter"></i>
+        </button>
+        Classe e "toogleFilter" (typo com 2 'o' do desenvolvedor).
         """
         try:
-            # JavaScript: encontra i.fa-filter e clica no pai
-            clicou = self.driver.execute_script("""
-                // Busca por classe exata
-                var icones = document.querySelectorAll('i.fa-filter, i[class*="fa-filter"]');
-                if (icones.length > 0) {
-                    var pai = icones[0].parentElement;
-                    if (pai) { pai.click(); return 'pai'; }
-                    icones[0].click(); return 'icone';
-                }
-                // Busca qualquer elemento com filter na classe
-                var todos = document.querySelectorAll('[class*="filter"]');
-                for (var i = 0; i < todos.length; i++) {
-                    var el = todos[i];
-                    var tag = el.tagName.toLowerCase();
-                    if (tag === 'i' || tag === 'button' || tag === 'a' || tag === 'span') {
-                        el.click(); return 'generico-' + tag;
-                    }
-                    if (tag === 'i') {
-                        var p = el.parentElement;
-                        if (p) { p.click(); return 'generico-pai'; }
-                    }
-                }
-                return null;
-            """)
+            # ESTRATEGIA 1: CSS Selector com classe exata "toogleFilter"
+            botao = self.driver.find_element(By.CSS_SELECTOR, "button.toogleFilter")
+            botao.click()
+            time.sleep(2)
+            if self._campo_integracao_visivel():
+                logger.debug("Filtro aberto via button.toogleFilter (CSS)")
+                return True
+        except Exception:
+            pass
 
-            if clicou:
-                logger.debug(f"Filtro clicado via JS: {clicou}")
-                time.sleep(2)
-                return self._campo_integracao_visivel()
+        try:
+            # ESTRATEGIA 2: JavaScript com querySelector
+            self.driver.execute_script(
+                "var btn = document.querySelector('button.toogleFilter'); "
+                "if (btn) { btn.click(); }"
+            )
+            time.sleep(2)
+            if self._campo_integracao_visivel():
+                logger.debug("Filtro aberto via JS toogleFilter")
+                return True
+        except Exception:
+            pass
 
-        except Exception as e:
-            logger.debug(f"Erro JS filtro: {e}")
+        try:
+            # ESTRATEGIA 3: XPath com classe toogleFilter
+            botao = self.driver.find_element(By.XPATH,
+                "//button[contains(@class,'toogleFilter')]"
+            )
+            self.driver.execute_script("arguments[0].click();", botao)
+            time.sleep(2)
+            if self._campo_integracao_visivel():
+                logger.debug("Filtro aberto via XPath toogleFilter")
+                return True
+        except Exception:
+            pass
 
+        logger.warning("NAO conseguiu abrir o filtro toogleFilter!")
         return False
 
     def _ler_awb_resultado(self) -> str:
