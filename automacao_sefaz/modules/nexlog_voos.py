@@ -164,50 +164,32 @@ class NexlogVoos:
                 logger.error(f"Voo {voo.numero_controle} nao encontrado na tabela")
                 return ""
 
-            # Procura o botao de acoes na ultima coluna (setinha/dropdown)
-            try:
-                botao_acoes = linha.find_element(By.XPATH,
-                    ".//td[last()]//button | .//td[last()]//a[contains(@class,'dropdown')] "
-                    "| .//td[last()]//*[contains(@class,'btn')] "
-                    "| .//td[last()]//*[contains(@class,'action')] "
-                    "| .//td[last()]//i[contains(@class,'fa')]/.."
-                )
-            except Exception:
-                # Tenta clicar no ultimo td diretamente
-                botao_acoes = linha.find_element(By.XPATH, ".//td[last()]")
-            
-            botao_acoes.click()
-            time.sleep(2)
+            # Scroll para a linha ficar visivel
+            self.driver.execute_script(
+                "arguments[0].scrollIntoView({block:'center'});", linha
+            )
+            time.sleep(1)
 
-            # Clica em "Visualizar integracao MDFe" no menu dropdown
-            # O elemento tem tabindex="-1" e usa data-click com JavaScript,
-            # entao precisamos usar JavaScript executor para clicar
-            time.sleep(2)  # Espera menu abrir completamente
-            
-            # Busca o link pelo atributo data-click que contem "ViewMDFe"
-            # ou pelo texto "Visualizar integra" 
-            try:
-                opcao_mdfe = self.wait.until(
-                    EC.presence_of_element_located((By.XPATH,
-                        "//a[contains(@data-click,'ViewMDFe')]"
-                        " | //a[contains(@data-click,'ViewMDFe')]"
-                        " | //li[contains(@class,'VIEWMDFE')]//a"
-                    ))
-                )
-            except TimeoutException:
-                # Fallback: busca pelo texto
-                opcao_mdfe = self.wait.until(
-                    EC.presence_of_element_located((By.XPATH,
-                        "//a[contains(.,'Visualizar integra')]"
-                        " | //a[contains(.,'MDFe')]"
-                    ))
-                )
-            
-            # Usa JavaScript para clicar (contorna tabindex="-1")
-            self.driver.execute_script("arguments[0].click();", opcao_mdfe)
+            # --- ETAPA 1: Abrir dropdown de acoes ---
+            dropdown_aberto = self._abrir_dropdown_acoes(linha)
+            if not dropdown_aberto:
+                logger.error(f"Nao conseguiu abrir dropdown de acoes do voo {voo.numero_controle}")
+                return ""
+
+            time.sleep(1)
+
+            # --- ETAPA 2: Clicar em "Visualizar integracao MDFe" ---
+            clicou_mdfe = self._clicar_visualizar_mdfe()
+            if not clicou_mdfe:
+                logger.error(f"Nao conseguiu clicar em 'Visualizar integracao MDFe'")
+                # Debug: mostra o conteudo do dropdown
+                self._debug_dropdown()
+                self._fechar_dropdown()
+                return ""
+
             time.sleep(5)
 
-            # Le a chave da tabela no modal
+            # --- ETAPA 3: Ler chave do modal ---
             chave = self._ler_chave_modal()
 
             # Fecha o modal
@@ -219,6 +201,202 @@ class NexlogVoos:
             logger.error(f"Erro ao extrair chave MDF-e do voo {voo.numero_controle}: {e}")
             self._fechar_modal_integracao()
             return ""
+
+    def _abrir_dropdown_acoes(self, linha) -> bool:
+        """
+        Abre o dropdown de acoes na ultima coluna da linha.
+        Tenta multiplas estrategias para encontrar e clicar no botao.
+        """
+        estrategias_botao = [
+            # 1. Botao dropdown na ultima coluna
+            ".//td[last()]//button[contains(@class,'dropdown')]",
+            # 2. Qualquer botao na ultima coluna
+            ".//td[last()]//button",
+            # 3. Link com classe dropdown na ultima coluna
+            ".//td[last()]//a[contains(@class,'dropdown')]",
+            # 4. Icone de engrenagem/setinha (fa-cog, fa-ellipsis, fa-chevron)
+            ".//td[last()]//*[contains(@class,'fa-cog') or contains(@class,'fa-ellipsis') "
+            "or contains(@class,'fa-chevron') or contains(@class,'fa-angle')]/..",
+            # 5. Qualquer elemento com classe 'btn' na ultima coluna
+            ".//td[last()]//*[contains(@class,'btn')]",
+            # 6. Qualquer link na ultima coluna
+            ".//td[last()]//a",
+            # 7. Ultimo td inteiro (fallback)
+            ".//td[last()]",
+            # 8. Botao/link com data-toggle="dropdown"
+            ".//*[@data-toggle='dropdown']",
+            # 9. Qualquer icone na ultima coluna
+            ".//td[last()]//i/..",
+        ]
+
+        for xpath in estrategias_botao:
+            try:
+                elementos = linha.find_elements(By.XPATH, xpath)
+                for elem in elementos:
+                    if elem.is_displayed():
+                        try:
+                            elem.click()
+                        except Exception:
+                            self.driver.execute_script("arguments[0].click();", elem)
+                        time.sleep(1.5)
+
+                        # Verifica se um menu dropdown apareceu
+                        if self._dropdown_visivel():
+                            logger.debug(f"Dropdown aberto via: {xpath[:50]}")
+                            return True
+            except Exception:
+                continue
+
+        return False
+
+    def _dropdown_visivel(self) -> bool:
+        """Verifica se existe um dropdown/menu visivel na pagina."""
+        seletores = [
+            "//ul[contains(@class,'dropdown-menu') and contains(@class,'show')]",
+            "//ul[contains(@class,'dropdown-menu')][contains(@style,'display: block') "
+            "or contains(@style,'display:block')]",
+            "//div[contains(@class,'dropdown-menu') and contains(@class,'show')]",
+            "//div[contains(@class,'dropdown') and contains(@class,'open')]//ul",
+            "//ul[contains(@class,'dropdown-menu') and not(contains(@style,'display: none'))]"
+            "[not(contains(@style,'display:none'))]",
+        ]
+
+        for xpath in seletores:
+            try:
+                elementos = self.driver.find_elements(By.XPATH, xpath)
+                for elem in elementos:
+                    if elem.is_displayed():
+                        return True
+            except Exception:
+                continue
+
+        # Fallback: verifica se tem algum <li> com link visivel que parece menu
+        try:
+            opcoes = self.driver.find_elements(By.XPATH,
+                "//ul[contains(@class,'dropdown')]//li//a[contains(@data-click,'')]"
+            )
+            visiveis = [o for o in opcoes if o.is_displayed()]
+            if len(visiveis) >= 2:
+                return True
+        except Exception:
+            pass
+
+        return False
+
+    def _clicar_visualizar_mdfe(self) -> bool:
+        """
+        Clica na opcao "Visualizar integracao MDFe" no dropdown de acoes.
+        Tenta multiplas estrategias (data-click, texto, classe).
+        """
+        estrategias = [
+            # 1. data-click com variantes de casing
+            "//a[contains(@data-click,'ViewMDFe') or contains(@data-click,'viewMDFe') "
+            "or contains(@data-click,'viewmdfe') or contains(@data-click,'VIEWMDFE') "
+            "or contains(@data-click,'ViewMdfe')]",
+
+            # 2. Classe da <li> contendo VIEWMDFE (case-insensitive via translate)
+            "//li[contains(translate(@class,'abcdefghijklmnopqrstuvwxyz',"
+            "'ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'VIEWMDFE')]//a",
+
+            # 3. Texto do link contendo "Visualizar" E ("integra" ou "MDFe" ou "MDF")
+            "//a[contains(.,'Visualizar') and (contains(.,'integra') "
+            "or contains(.,'Integra') or contains(.,'MDFe') or contains(.,'MDF'))]",
+
+            # 4. Texto contendo apenas "MDFe" ou "MDF-e"
+            "//a[contains(.,'MDFe') or contains(.,'MDF-e')]"
+            "[ancestor::ul[contains(@class,'dropdown') or contains(@class,'menu')]]",
+
+            # 5. Link com texto contendo "integra" dentro de um menu dropdown
+            "//ul[contains(@class,'dropdown')]//a[contains(.,'integra') or contains(.,'Integra')]",
+
+            # 6. Qualquer link dentro do dropdown que mencione MDF
+            "//ul[contains(@class,'dropdown')]//a[contains(translate(.,"
+            "'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'MDF')]",
+
+            # 7. Qualquer link com data-click dentro de dropdown visivel
+            "//ul[contains(@class,'dropdown')]//a[@data-click]"
+            "[contains(translate(@data-click,'abcdefghijklmnopqrstuvwxyz',"
+            "'ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'MDF')]",
+
+            # 8. Li com classe que contem MDF (case insensitive)
+            "//li[contains(translate(@class,'abcdefghijklmnopqrstuvwxyz',"
+            "'ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'MDF')]//a",
+        ]
+
+        for xpath in estrategias:
+            try:
+                elementos = self.driver.find_elements(By.XPATH, xpath)
+                for elem in elementos:
+                    # Aceita mesmo nao visivel (tabindex=-1 pode nao ser 'displayed')
+                    try:
+                        # Tenta via JavaScript (mais confiavel para menus dropdown)
+                        self.driver.execute_script("arguments[0].click();", elem)
+                        logger.info(f"Clicou em 'Visualizar integracao MDFe' via: {xpath[:50]}...")
+                        return True
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+
+        # Ultima estrategia: busca TODOS os links no dropdown e filtra por texto
+        try:
+            todos_links = self.driver.find_elements(By.XPATH,
+                "//ul[contains(@class,'dropdown')]//a"
+            )
+            for link in todos_links:
+                texto = ""
+                try:
+                    texto = link.text.strip().upper()
+                    if not texto:
+                        texto = (link.get_attribute("textContent") or "").strip().upper()
+                except Exception:
+                    continue
+
+                if "MDF" in texto or "INTEGRA" in texto:
+                    self.driver.execute_script("arguments[0].click();", link)
+                    logger.info(f"Clicou via busca de texto: '{texto}'")
+                    return True
+
+                # Verifica data-click tambem
+                data_click = (link.get_attribute("data-click") or "").upper()
+                if "MDF" in data_click:
+                    self.driver.execute_script("arguments[0].click();", link)
+                    logger.info(f"Clicou via data-click: '{data_click}'")
+                    return True
+        except Exception:
+            pass
+
+        return False
+
+    def _debug_dropdown(self):
+        """Loga o conteudo do dropdown aberto para debug."""
+        try:
+            menus = self.driver.find_elements(By.XPATH,
+                "//ul[contains(@class,'dropdown')]"
+            )
+            for menu in menus:
+                if menu.is_displayed():
+                    logger.warning(f"DROPDOWN ABERTO - HTML:")
+                    html = menu.get_attribute("innerHTML")
+                    logger.warning(html[:1000])
+
+                    links = menu.find_elements(By.TAG_NAME, "a")
+                    for link in links:
+                        texto = link.text or link.get_attribute("textContent") or ""
+                        dc = link.get_attribute("data-click") or ""
+                        cls = link.get_attribute("class") or ""
+                        logger.warning(f"  <a data-click='{dc}' class='{cls}'>{texto.strip()}</a>")
+        except Exception as e:
+            logger.debug(f"Erro ao debugar dropdown: {e}")
+
+    def _fechar_dropdown(self):
+        """Fecha qualquer dropdown aberto."""
+        try:
+            from selenium.webdriver.common.action_chains import ActionChains
+            ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+            time.sleep(0.5)
+        except Exception:
+            pass
 
     def _encontrar_linha_voo(self, numero_controle: str):
         """

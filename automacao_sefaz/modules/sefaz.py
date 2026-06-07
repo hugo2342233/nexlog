@@ -17,6 +17,7 @@ Fluxo do site:
 """
 
 import time
+import re
 import logging
 from typing import Optional
 
@@ -225,9 +226,96 @@ class SefazConsulta:
             self.driver.get("https://transportadoras.sefaz.al.gov.br/#/painel-mdfes-analisados")
             time.sleep(3)
 
+    def _encontrar_campo_chave(self):
+        """
+        Encontra o campo de input da chave MDF-e na pagina de consulta.
+        O site da SEFAZ-AL usa Angular e os campos sao renderizados dinamicamente.
+        Tenta multiplas estrategias para encontrar o campo.
+        """
+        estrategias = [
+            # 1. Por placeholder (mais comum em SPAs Angular)
+            (By.XPATH, "//input[contains(@placeholder,'have') or contains(@placeholder,'MDF') "
+                       "or contains(@placeholder,'Chave') or contains(@placeholder,'chave') "
+                       "or contains(@placeholder,'mero')]"),
+            # 2. Por ng-model (Angular 1.x)
+            (By.XPATH, "//input[contains(@ng-model,'chave') or contains(@ng-model,'Chave') "
+                       "or contains(@ng-model,'numero') or contains(@ng-model,'mdfe')]"),
+            # 3. Por formControlName (Angular 2+)
+            (By.XPATH, "//input[contains(@formcontrolname,'chave') or "
+                       "contains(@formcontrolname,'Chave') or "
+                       "contains(@formcontrolname,'numero') or "
+                       "contains(@formcontrolname,'mdfe')]"),
+            # 4. Por CSS class com input de texto visivel
+            (By.CSS_SELECTOR, "input.form-control[type='text']"),
+            # 5. Qualquer input text dentro de form-group
+            (By.XPATH, "//div[contains(@class,'form-group')]//input[@type='text' or not(@type)]"),
+            # 6. Input proximo a label com texto "Chave" ou "MDF"
+            (By.XPATH, "//label[contains(.,'have') or contains(.,'MDF') or contains(.,'mero')]"
+                       "/following::input[1]"),
+            # 7. Qualquer input visivel que nao seja hidden/checkbox/radio
+            (By.XPATH, "//input[not(@type='hidden') and not(@type='checkbox') "
+                       "and not(@type='radio') and not(@type='password') "
+                       "and not(@type='submit') and not(@type='button')]"),
+        ]
+
+        for by, selector in estrategias:
+            try:
+                elementos = self.driver.find_elements(by, selector)
+                # Filtra apenas os visiveis
+                visiveis = [e for e in elementos if e.is_displayed()]
+                if visiveis:
+                    # Prefere o que esta vazio ou menor (campo de input principal)
+                    for elem in visiveis:
+                        valor_atual = elem.get_attribute("value") or ""
+                        if len(valor_atual) < 5:  # Campo vazio ou quase vazio
+                            logger.debug(f"SEFAZ: Campo encontrado via estrategia: {selector[:60]}")
+                            return elem
+                    # Se todos tem valor, retorna o primeiro visivel
+                    logger.debug(f"SEFAZ: Campo encontrado (com valor) via: {selector[:60]}")
+                    return visiveis[0]
+            except Exception:
+                continue
+
+        return None
+
+    def _encontrar_botao_pesquisar(self):
+        """
+        Encontra o botao de pesquisar na pagina de consulta.
+        Tenta multiplas estrategias.
+        """
+        estrategias = [
+            # 1. Botao com texto "Pesquisar"
+            (By.XPATH, "//button[contains(.,'Pesquisar')]"),
+            # 2. Botao com texto "Consultar"
+            (By.XPATH, "//button[contains(.,'Consultar')]"),
+            # 3. Botao com texto "Buscar"
+            (By.XPATH, "//button[contains(.,'Buscar')]"),
+            # 4. Botao btn-primary (geralmente o de acao principal)
+            (By.CSS_SELECTOR, "button.btn-primary"),
+            # 5. Botao com icone de busca (fa-search)
+            (By.XPATH, "//button[.//i[contains(@class,'fa-search') or contains(@class,'search')]]"),
+            # 6. Botao type=submit
+            (By.XPATH, "//button[@type='submit']"),
+            # 7. Input type=submit
+            (By.XPATH, "//input[@type='submit']"),
+        ]
+
+        for by, selector in estrategias:
+            try:
+                elementos = self.driver.find_elements(by, selector)
+                visiveis = [e for e in elementos if e.is_displayed() and e.is_enabled()]
+                if visiveis:
+                    logger.debug(f"SEFAZ: Botao pesquisar encontrado via: {selector[:60]}")
+                    return visiveis[0]
+            except Exception:
+                continue
+
+        return None
+
     def consultar_chave_mdfe(self, chave: str) -> Optional[ConsultaMDFe]:
         """
         Consulta uma chave de MDF-e no site da SEFAZ.
+        Usa estrategias multiplas para encontrar o campo de input (Angular SPA).
 
         Returns:
             ConsultaMDFe com dados extraidos, ou None se deu erro/nao encontrou
@@ -236,33 +324,82 @@ class SefazConsulta:
             self.driver.switch_to.window(self._aba_sefaz)
 
         try:
-            # Campo "Chave/Numero do MDF-e"
-            campo_chave = self.wait.until(
-                EC.element_to_be_clickable((By.XPATH,
-                    "//input[contains(@placeholder,'have') or contains(@placeholder,'MDF') "
-                    "or contains(@placeholder,'Chave')]"
-                    " | //input[@type='text' and ancestor::*[contains(.,'Chave')]]"
-                ))
-            )
-            campo_chave.click()
+            # Aguarda a pagina carregar completamente
+            time.sleep(3)
+
+            # DEBUG: loga inputs visiveis para diagnostico
+            self._debug_inputs_pagina()
+
+            # Campo "Chave/Numero do MDF-e" - estrategia robusta
+            campo_chave = self._encontrar_campo_chave()
+
+            if not campo_chave:
+                logger.error("SEFAZ: Campo de chave NAO encontrado! Tentando aguardar mais...")
+                time.sleep(5)
+                campo_chave = self._encontrar_campo_chave()
+
+            if not campo_chave:
+                logger.error("SEFAZ: Campo de chave NAO encontrado apos retry!")
+                logger.error(f"SEFAZ: URL atual: {self.driver.current_url}")
+                logger.error(f"SEFAZ: Titulo: {self.driver.title}")
+                # Tenta renavegar para a pagina de consulta
+                self.navegar_consulta_analise_mdfe()
+                time.sleep(3)
+                campo_chave = self._encontrar_campo_chave()
+
+            if not campo_chave:
+                logger.error("SEFAZ: FALHA TOTAL - campo de chave nao encontrado")
+                return None
+
+            # Limpa e preenche o campo
+            try:
+                campo_chave.click()
+            except Exception:
+                self.driver.execute_script("arguments[0].click(); arguments[0].focus();", campo_chave)
+
+            time.sleep(0.3)
             campo_chave.send_keys(Keys.CONTROL, "a")
             campo_chave.send_keys(Keys.BACKSPACE)
-            campo_chave.send_keys(chave)
-            time.sleep(0.5)
+            time.sleep(0.3)
 
-            # Botao "Pesquisar" (azul)
-            botao_pesquisar = self.wait.until(
-                EC.element_to_be_clickable((By.XPATH,
-                    "//button[contains(.,'Pesquisar')]"
-                ))
-            )
-            botao_pesquisar.click()
-            time.sleep(6)
+            # Digita a chave caractere por caractere (mais seguro em SPAs)
+            campo_chave.send_keys(chave)
+            time.sleep(1)
+
+            # Verifica se o valor foi preenchido corretamente
+            valor_digitado = campo_chave.get_attribute("value") or ""
+            if len(valor_digitado) < 40:
+                logger.warning(f"SEFAZ: Campo pode nao ter recebido a chave completa. "
+                             f"Valor: '{valor_digitado}' ({len(valor_digitado)} chars)")
+                # Tenta via JavaScript
+                self.driver.execute_script(
+                    "arguments[0].value = arguments[1]; "
+                    "arguments[0].dispatchEvent(new Event('input', {bubbles: true})); "
+                    "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
+                    campo_chave, chave
+                )
+                time.sleep(1)
+
+            # Botao "Pesquisar" - estrategia robusta
+            botao_pesquisar = self._encontrar_botao_pesquisar()
+
+            if not botao_pesquisar:
+                logger.warning("SEFAZ: Botao pesquisar nao encontrado, tentando ENTER")
+                campo_chave.send_keys(Keys.ENTER)
+            else:
+                try:
+                    botao_pesquisar.click()
+                except Exception:
+                    self.driver.execute_script("arguments[0].click();", botao_pesquisar)
+
+            time.sleep(8)
 
             # Verifica se deu erro "Nenhuma analise encontrada"
             try:
                 msg_erro = self.driver.find_element(By.XPATH,
-                    "//*[contains(.,'Nenhuma an') and contains(.,'lise encontrada')]"
+                    "//*[contains(text(),'Nenhuma an') or contains(text(),'nenhuma an') "
+                    "or contains(text(),'não encontrad') or contains(text(),'nao encontrad') "
+                    "or contains(text(),'Nenhum resultado')]"
                 )
                 if msg_erro.is_displayed():
                     logger.info(f"SEFAZ: Nenhuma analise encontrada para chave {chave[:20]}...")
@@ -270,6 +407,17 @@ class SefazConsulta:
                     return resultado
             except Exception:
                 pass
+
+            # Verifica se apareceu uma tabela de resultados
+            try:
+                tabela = WebDriverWait(self.driver, 5).until(
+                    EC.presence_of_element_located((By.XPATH,
+                        "//table[.//th or .//td] | //div[contains(@class,'table')]"
+                    ))
+                )
+                logger.info("SEFAZ: Tabela de resultados encontrada!")
+            except TimeoutException:
+                logger.warning("SEFAZ: Nenhuma tabela encontrada apos pesquisa")
 
             # Resultado encontrado - clica em "Imprimir Relatorio"
             texto_relatorio = self._imprimir_relatorio()
@@ -281,11 +429,87 @@ class SefazConsulta:
                     resultado.chave = chave
                 return resultado
             else:
+                # Tenta extrair dados direto da pagina (tabela de resultados)
+                resultado_direto = self._extrair_resultado_tabela(chave)
+                if resultado_direto:
+                    return resultado_direto
+
                 logger.warning("SEFAZ: Nao conseguiu extrair relatorio")
                 return ConsultaMDFe(chave=chave, status=StatusMDFe.DESCONHECIDO)
 
         except Exception as e:
             logger.error(f"SEFAZ: Erro na consulta: {e}")
+            # Log adicional de debug
+            try:
+                logger.error(f"SEFAZ: URL no erro: {self.driver.current_url}")
+                logger.error(f"SEFAZ: Titulo no erro: {self.driver.title}")
+            except Exception:
+                pass
+            return None
+
+    def _debug_inputs_pagina(self):
+        """Loga todos os inputs visiveis para debug."""
+        try:
+            inputs = self.driver.find_elements(By.TAG_NAME, "input")
+            visiveis = [i for i in inputs if i.is_displayed()]
+            logger.debug(f"SEFAZ DEBUG: {len(visiveis)} inputs visiveis na pagina:")
+            for inp in visiveis[:10]:
+                tipo = inp.get_attribute("type") or "text"
+                ph = inp.get_attribute("placeholder") or ""
+                ng = inp.get_attribute("ng-model") or ""
+                fc = inp.get_attribute("formcontrolname") or ""
+                cls = inp.get_attribute("class") or ""
+                logger.debug(f"  <input type='{tipo}' placeholder='{ph}' "
+                           f"ng-model='{ng}' formcontrolname='{fc}' "
+                           f"class='{cls[:40]}'>")
+        except Exception as e:
+            logger.debug(f"SEFAZ DEBUG: erro ao listar inputs: {e}")
+
+    def _extrair_resultado_tabela(self, chave: str) -> Optional[ConsultaMDFe]:
+        """
+        Tenta extrair o resultado diretamente da tabela exibida na pagina,
+        sem precisar clicar em 'Imprimir Relatorio'.
+        Util quando o botao de imprimir nao funciona.
+        """
+        try:
+            # Busca texto da tabela
+            tabelas = self.driver.find_elements(By.TAG_NAME, "table")
+            texto_total = ""
+            for t in tabelas:
+                if t.is_displayed():
+                    texto_total += t.text + "\n"
+
+            if len(texto_total) < 20:
+                return None
+
+            # Verifica se tem info de status
+            import re
+            texto_upper = texto_total.upper()
+
+            status = StatusMDFe.DESCONHECIDO
+            if "COM PEND" in texto_upper:
+                status = StatusMDFe.ANALISADO_COM_PENDENCIAS
+            elif "SEM PEND" in texto_upper:
+                status = StatusMDFe.ANALISADO_SEM_PENDENCIAS
+            elif "EM AN" in texto_upper:
+                status = StatusMDFe.EM_ANALISE
+
+            # Tenta extrair numero de TAs
+            match_ta = re.search(r'(\d+)\s*TA', texto_total, re.IGNORECASE)
+            total_termos = int(match_ta.group(1)) if match_ta else 0
+
+            resultado = ConsultaMDFe(
+                chave=chave,
+                status=status,
+                total_termos=total_termos,
+            )
+
+            logger.info(f"SEFAZ: Resultado extraido da tabela: status={status.value}, "
+                       f"termos={total_termos}")
+            return resultado
+
+        except Exception as e:
+            logger.debug(f"SEFAZ: Erro ao extrair resultado da tabela: {e}")
             return None
 
     def _imprimir_relatorio(self) -> str:
