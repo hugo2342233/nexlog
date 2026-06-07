@@ -55,20 +55,52 @@ class SefazConsulta:
             raise ValueError("Credenciais da SEFAZ nao configuradas.")
 
         self.driver.get(config.url_sefaz)
-        time.sleep(3)
+        time.sleep(5)  # SPA precisa de mais tempo pra carregar
 
-        # Localiza campos de login
-        # NOTA: Os seletores abaixo precisam ser ajustados conforme a tela real
-        # Vamos usar seletores genericos que podem ser refinados nos testes
         try:
-            campo_usuario = self.wait.until(
-                EC.element_to_be_clickable((
-                    By.XPATH,
-                    "//input[@type='text' or @type='email' or @placeholder='Usuário' "
-                    "or @placeholder='Login' or @placeholder='CPF/CNPJ' or @name='username' "
-                    "or @id='username' or @id='login']"
-                ))
-            )
+            # O site mostra "Realize o login para ver os servicos disponiveis"
+            # O login fica no menu "Conta" no canto superior direito
+            # Tenta clicar no menu/link "Conta" ou "Login"
+            try:
+                menu_conta = self.wait.until(
+                    EC.element_to_be_clickable((
+                        By.XPATH,
+                        "//a[contains(text(),'Conta')] | "
+                        "//button[contains(text(),'Conta')] | "
+                        "//a[contains(text(),'Login')] | "
+                        "//a[contains(text(),'login')] | "
+                        "//li[contains(.,'Conta')]//a | "
+                        "//*[contains(@class,'dropdown')]//a[contains(.,'Conta')]"
+                    ))
+                )
+                menu_conta.click()
+                time.sleep(2)
+            except TimeoutException:
+                logger.info("SEFAZ: Menu 'Conta' nao encontrado, tentando login direto")
+
+            # Tenta clicar em "Entrar" ou "Login" no submenu
+            try:
+                opcao_login = WebDriverWait(self.driver, 5).until(
+                    EC.element_to_be_clickable((
+                        By.XPATH,
+                        "//a[contains(text(),'Entrar')] | "
+                        "//a[contains(text(),'Login')] | "
+                        "//button[contains(text(),'Entrar')] | "
+                        "//a[contains(@href,'login')] | "
+                        "//a[contains(@href,'Login')]"
+                    ))
+                )
+                opcao_login.click()
+                time.sleep(3)
+            except TimeoutException:
+                logger.info("SEFAZ: Opcao 'Entrar' nao encontrada, pode ja estar na tela de login")
+
+            # Agora busca os campos de login
+            # Tenta multiplas estrategias de seletores
+            campo_usuario = self._encontrar_campo_usuario()
+            if campo_usuario is None:
+                raise RuntimeError("Nao encontrou campo de usuario/login")
+
             campo_usuario.clear()
             campo_usuario.send_keys(usuario)
 
@@ -81,23 +113,67 @@ class SefazConsulta:
             campo_senha.clear()
             campo_senha.send_keys(senha)
 
-            # Botao de login
+            # Botao de login/entrar
             botao = self.wait.until(
                 EC.element_to_be_clickable((
                     By.XPATH,
-                    "//button[@type='submit'] | //button[contains(text(),'Entrar')] "
-                    "| //button[contains(text(),'Login')] | //input[@type='submit']"
+                    "//button[@type='submit'] | "
+                    "//button[contains(text(),'Entrar')] | "
+                    "//button[contains(text(),'Login')] | "
+                    "//button[contains(text(),'Acessar')] | "
+                    "//input[@type='submit'] | "
+                    "//button[contains(@class,'btn-primary')] | "
+                    "//button[contains(@class,'btn') and contains(@class,'login')]"
                 ))
             )
             botao.click()
 
-            time.sleep(4)
+            time.sleep(5)
             self._logado = True
             logger.info("SEFAZ: Login realizado com sucesso")
 
         except TimeoutException:
             logger.error("SEFAZ: Nao encontrou campos de login")
             raise RuntimeError("Falha no login da SEFAZ - campos nao encontrados")
+
+    def _encontrar_campo_usuario(self):
+        """
+        Tenta encontrar o campo de usuario com diversas estrategias.
+        Sites SPA podem ter IDs dinamicos, entao tenta varias abordagens.
+        """
+        seletores = [
+            # Por tipo e placeholder
+            "//input[contains(@placeholder,'usu') or contains(@placeholder,'Usu')]",
+            "//input[contains(@placeholder,'login') or contains(@placeholder,'Login')]",
+            "//input[contains(@placeholder,'CPF') or contains(@placeholder,'cpf')]",
+            "//input[contains(@placeholder,'CNPJ') or contains(@placeholder,'cnpj')]",
+            "//input[contains(@placeholder,'E-mail') or contains(@placeholder,'email')]",
+            # Por id/name
+            "//input[@id='username' or @id='login' or @id='user' or @id='email']",
+            "//input[@name='username' or @name='login' or @name='user' or @name='email']",
+            # Por tipo (text que NAO e senha e NAO e busca)
+            "//input[@type='text' and not(contains(@placeholder,'Pesquis')) "
+            "and not(contains(@placeholder,'Busca'))]",
+            "//input[@type='email']",
+            # Por label
+            "//label[contains(text(),'usu') or contains(text(),'Usu') or "
+            "contains(text(),'Login')]//following::input[1]",
+            # Primeiro input visivel em formulario
+            "//form//input[@type='text' or @type='email'][1]",
+        ]
+
+        for xpath in seletores:
+            try:
+                campo = WebDriverWait(self.driver, 3).until(
+                    EC.element_to_be_clickable((By.XPATH, xpath))
+                )
+                if campo.is_displayed():
+                    logger.info(f"SEFAZ: Campo usuario encontrado com: {xpath[:50]}")
+                    return campo
+            except TimeoutException:
+                continue
+
+        return None
 
     def navegar_consulta_analise_mdfe(self):
         """Navega ate a pagina de Consulta Analise MDF-e."""
