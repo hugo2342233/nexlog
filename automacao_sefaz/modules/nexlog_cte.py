@@ -120,20 +120,65 @@ class NexlogCTeOperacoes:
             campo_visivel = False
 
         if not campo_visivel:
-            # Clica no botao de filtro para MOSTRAR os campos
-            try:
-                filtro_btn = self.driver.find_element(By.XPATH,
-                    "//button[contains(@class,'filter')] "
-                    "| //*[contains(@class,'fa-filter')]/.."
-                    "| //button[contains(@title,'iltro') or contains(@title,'ilter')]"
-                    "| //a[contains(@class,'filter')]"
-                )
-                if filtro_btn.is_displayed():
-                    filtro_btn.click()
-                    time.sleep(1.5)
-                    logger.debug("Clicou no botao de filtro para mostrar campos")
-            except Exception as e:
-                logger.debug(f"Botao de filtro nao encontrado: {e}")
+            logger.debug("Campo integracao NAO visivel - tentando abrir filtro...")
+            
+            # Tenta TODAS as formas de encontrar o botao de filtro
+            seletores_filtro = [
+                # Icone de funil/filtro (FontAwesome)
+                "//*[contains(@class,'fa-filter')]/..",
+                "//*[contains(@class,'fa-filter')]",
+                # Botao com classe filter
+                "//button[contains(@class,'filter')]",
+                "//a[contains(@class,'filter')]",
+                # Botao com title
+                "//button[contains(@title,'iltro') or contains(@title,'ilter')]",
+                "//a[contains(@title,'iltro') or contains(@title,'ilter')]",
+                # Botao com texto "Filtro" ou icone
+                "//button[contains(.,'Filtro') or contains(.,'filtro')]",
+                # Icone de busca/filtro no header da secao
+                "//*[contains(@class,'glyphicon-filter')]/..",
+                # Link/botao proximo ao "Pesquisar" que parece filtro
+                "//button[contains(@class,'btn') and contains(@class,'filt')]",
+                # Qualquer elemento com data-toggle que contenha filtro
+                "//*[@data-toggle='collapse'][contains(@href,'filter') or contains(@href,'Filter')]",
+                "//*[@data-toggle='collapse'][contains(@data-target,'filter') or contains(@data-target,'Filter')]",
+            ]
+            
+            for xpath in seletores_filtro:
+                try:
+                    elementos = self.driver.find_elements(By.XPATH, xpath)
+                    for elem in elementos:
+                        if elem.is_displayed():
+                            elem.click()
+                            time.sleep(1.5)
+                            
+                            # Verifica se o campo apareceu
+                            try:
+                                campo_teste2 = self.driver.find_element(By.XPATH,
+                                    "//input[contains(@id,'Integration') or "
+                                    "contains(@name,'Integration') or "
+                                    "contains(@id,'integration')]"
+                                    " | //label[contains(.,'integra')]//following::input[1]"
+                                    " | //input[contains(@placeholder,'integra')]"
+                                )
+                                if campo_teste2.is_displayed():
+                                    logger.debug(f"Filtro aberto via: {xpath[:50]}")
+                                    return
+                            except Exception:
+                                # Clicou mas campo nao apareceu - pode ter escondido
+                                # Clica de novo para reverter
+                                try:
+                                    elem.click()
+                                    time.sleep(0.5)
+                                except Exception:
+                                    pass
+                            break
+                except Exception:
+                    continue
+            
+            # Se nada funcionou, loga aviso
+            logger.warning("NAO conseguiu abrir o filtro de integracao! "
+                         "O campo pode nao aparecer.")
 
     def _ler_awb_resultado(self) -> str:
         """Le o AWB (N. documento) da primeira linha da tabela de resultados."""
