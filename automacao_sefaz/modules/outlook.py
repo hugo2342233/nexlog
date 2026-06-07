@@ -310,57 +310,131 @@ class OutlookWeb:
     def _encontrar_anexo(self):
         """
         Encontra o elemento do anexo PDF no email aberto.
-        Tenta multiplas estrategias para diferentes versoes do Outlook Web.
+        
+        O Outlook Web (OWA) moderno usa classes CSS obfuscadas e componentes React/Fluent UI.
+        O anexo geralmente aparece como:
+        - Um card/botao com o nome do arquivo (ex: "relatório.pdf" ou "MDF-E 123456.pdf")
+        - Um elemento com role="listitem" ou role="button" dentro da area de anexos
+        - Um link <a> com o nome do arquivo
+        
+        Estrategia: busca QUALQUER elemento que tenha ".pdf" no texto ou atributos,
+        e tambem busca cards de anexo genéricos (pode nao ter .pdf no nome visivel).
         """
-        estrategias = [
-            # 1. Card de anexo com texto PDF ou MDF (Outlook moderno)
-            "//div[contains(@class,'attachment') or contains(@class,'Attachment')]"
-            "[contains(.,'pdf') or contains(.,'PDF') or contains(.,'MDF') or contains(.,'mdf')]",
+        # Primeiro aguarda um pouco para os anexos renderizarem
+        time.sleep(2)
 
-            # 2. Elemento com aria-label contendo PDF
-            "//*[contains(@aria-label,'pdf') or contains(@aria-label,'PDF') "
-            "or contains(@aria-label,'MDF')]"
-            "[contains(@class,'attachment') or contains(@role,'button') or contains(@role,'listitem')]",
-
-            # 3. Link com .pdf na URL ou texto
-            "//a[contains(@href,'.pdf') or contains(.,'pdf') or contains(.,'PDF')]"
-            "[ancestor::*[contains(@class,'attachment') or contains(@class,'ReadingPane') "
-            "or contains(@class,'ItemBody')]]",
-
-            # 4. Botao/div com icone de arquivo (generico Outlook)
-            "//div[contains(@class,'AttachmentCard') or contains(@class,'attachmentCard')]",
-
-            # 5. Qualquer elemento clicavel com "pdf" no texto dentro da area de leitura
-            "//div[contains(@class,'ReadingPane') or contains(@class,'reading')]"
-            "//*[contains(.,'pdf') or contains(.,'PDF')]"
-            "[self::a or self::button or self::div[contains(@class,'attachment') "
-            "or contains(@role,'button')]]",
-
-            # 6. Span ou div com nome do arquivo (.pdf)
-            "//*[contains(text(),'.pdf') or contains(text(),'.PDF')]"
-            "[ancestor::*[contains(@class,'attachment') or contains(@class,'Attachment')]]",
-
-            # 7. Fallback: qualquer coisa com class attachment
-            "//*[contains(@class,'ttachment')]"
-            "[.//span[contains(text(),'pdf') or contains(text(),'PDF') "
-            "or contains(text(),'MDF') or contains(text(),'Relat')]]",
+        # FASE 1: Busca especifica por .pdf no texto/atributos
+        estrategias_pdf = [
+            # Nome do arquivo contendo .pdf no texto direto
+            "//*[contains(text(),'.pdf') or contains(text(),'.PDF')]",
+            # aria-label com .pdf
+            "//*[contains(@aria-label,'.pdf') or contains(@aria-label,'.PDF')]",
+            # title com .pdf
+            "//*[contains(@title,'.pdf') or contains(@title,'.PDF')]",
+            # Qualquer elemento com texto contendo "pdf" (mais amplo)
+            "//span[contains(text(),'.pdf') or contains(text(),'.PDF')]",
+            "//button[contains(@aria-label,'.pdf') or contains(@title,'.pdf')]",
+            "//a[contains(@href,'.pdf')]",
         ]
 
-        for xpath in estrategias:
+        for xpath in estrategias_pdf:
             try:
                 elementos = self.driver.find_elements(By.XPATH, xpath)
-                visiveis = [e for e in elementos if e.is_displayed()]
-                if visiveis:
-                    logger.debug(f"Outlook: Anexo encontrado via: {xpath[:60]}...")
-                    return visiveis[0]
+                for elem in elementos:
+                    if elem.is_displayed():
+                        # Verifica se nao e um elemento de navegacao/menu do outlook
+                        tag = elem.tag_name.lower()
+                        classe = (elem.get_attribute("class") or "").lower()
+                        # Ignora headers, nav, e elementos muito grandes (containers)
+                        if tag not in ("html", "body", "head", "nav", "header"):
+                            tamanho = elem.size
+                            # Anexos tipicamente sao cards pequenos/medios
+                            if tamanho.get("height", 0) < 200:
+                                logger.debug(f"Outlook: Anexo PDF encontrado via: {xpath[:50]}")
+                                return elem
             except Exception:
                 continue
 
-        # Ultima tentativa: busca qualquer coisa com "pdf" visivel na area de leitura
+        # FASE 2: Busca por cards/areas de anexo genéricos do Outlook
+        estrategias_card = [
+            # Outlook moderno: div com class contendo "attachment" (varias grafias)
+            "//div[contains(@class,'ttachment')]",
+            "//div[contains(@class,'Attachment')]",
+            "//div[contains(@class,'attachment')]",
+            # Elementos com role que indicam anexo
+            "//*[@role='listitem'][ancestor::*[contains(@aria-label,'nexo') "
+            "or contains(@aria-label,'ttachment')]]",
+            # Area de anexos do OWA
+            "//div[contains(@class,'AttachmentWell')]",
+            "//div[contains(@aria-label,'nexo') or contains(@aria-label,'Attachment')]",
+            # Botoes dentro da area de mensagem que parecem anexo
+            "//div[contains(@class,'ReadingPane') or contains(@class,'reading')]"
+            "//button[contains(@class,'file') or contains(@class,'File')]",
+            # Icone de clip/paperclip proximo a um nome de arquivo
+            "//*[contains(@class,'paperclip') or contains(@class,'Paperclip') "
+            "or contains(@class,'attach') or contains(@data-icon-name,'Attach')]"
+            "/following-sibling::*",
+            # Fallback: qualquer coisa com "Anexo" ou "Attachment" no aria-label
+            "//*[contains(@aria-label,'Anexo') or contains(@aria-label,'attachment') "
+            "or contains(@aria-label,'Attachment')]"
+            "[self::div or self::button or self::a or self::span]",
+        ]
+
+        for xpath in estrategias_card:
+            try:
+                elementos = self.driver.find_elements(By.XPATH, xpath)
+                for elem in elementos:
+                    if elem.is_displayed():
+                        tamanho = elem.size
+                        # Verifica se e um card de tamanho razoavel (nao o container inteiro)
+                        if 20 < tamanho.get("height", 0) < 150 and tamanho.get("width", 0) > 50:
+                            logger.debug(f"Outlook: Card de anexo encontrado via: {xpath[:50]}")
+                            return elem
+            except Exception:
+                continue
+
+        # FASE 3: Busca por qualquer elemento clicavel na regiao de anexos
+        # Tenta achar a area de anexos e pegar o primeiro item dentro dela
         try:
-            page_source = self.driver.page_source.lower()
-            if '.pdf' in page_source:
-                logger.debug("Outlook: '.pdf' encontrado no HTML mas nenhum elemento clicavel")
+            # Procura a area/container de anexos
+            containers = self.driver.find_elements(By.XPATH,
+                "//div[contains(@class,'ttachment') or contains(@class,'Attachment') "
+                "or contains(@aria-label,'nexo') or contains(@aria-label,'ttachment')]"
+            )
+            for container in containers:
+                if container.is_displayed():
+                    # Pega o primeiro filho clicavel
+                    filhos = container.find_elements(By.XPATH,
+                        ".//a | .//button | .//div[@role='button'] | .//div[@tabindex]"
+                    )
+                    for filho in filhos:
+                        if filho.is_displayed():
+                            logger.debug("Outlook: Anexo encontrado via container de anexos")
+                            return filho
+        except Exception:
+            pass
+
+        # FASE 4: Debug - loga o que esta visivel na area de leitura
+        logger.warning("Outlook: Nenhum anexo encontrado!")
+        try:
+            # Verifica se .pdf existe no HTML mesmo que nao visivel
+            page_source = self.driver.page_source
+            if '.pdf' in page_source.lower():
+                logger.warning("Outlook: '.pdf' existe no HTML! Elementos com 'pdf':")
+                todos = self.driver.find_elements(By.XPATH, 
+                    "//*[contains(@aria-label,'.pdf') or contains(@title,'.pdf') "
+                    "or contains(text(),'.pdf')]"
+                )
+                for elem in todos[:5]:
+                    tag = elem.tag_name
+                    cls = (elem.get_attribute("class") or "")[:50]
+                    aria = (elem.get_attribute("aria-label") or "")[:50]
+                    txt = (elem.text or "")[:50]
+                    vis = elem.is_displayed()
+                    logger.warning(f"  <{tag} class='{cls}' aria-label='{aria}' "
+                                 f"visible={vis}>{txt}</{tag}>")
+            else:
+                logger.warning("Outlook: '.pdf' NAO existe no HTML da pagina")
         except Exception:
             pass
 

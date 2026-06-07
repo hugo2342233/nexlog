@@ -204,26 +204,78 @@ class SefazConsulta:
             raise RuntimeError("Falha no login da SEFAZ")
 
     def navegar_consulta_analise_mdfe(self):
-        """Clica no botao 'Consulta Analise MDF-e' (botao azul grande)."""
+        """
+        Clica no botao 'Consulta Analise MDF-e' (botao azul grande com icone).
+        Na pagina inicial apos login, existem 3 cards azuis:
+          - Consultar TADe
+          - Consulta Analise MDF-e  <-- este
+          - Registro de Passagem
+        """
         if self._aba_sefaz:
             self.driver.switch_to.window(self._aba_sefaz)
 
         try:
-            botao_mdfe = self.wait.until(
-                EC.element_to_be_clickable((By.XPATH,
-                    "//*[contains(.,'lise MDF') and (self::a or self::button or self::div)]"
-                    "[not(contains(.,'Painel'))]"
-                    " | //a[contains(.,'lise MDF')]"
-                    " | //div[contains(.,'Consulta') and contains(.,'MDF')]"
-                    "/ancestor-or-self::a"
-                ))
-            )
-            botao_mdfe.click()
+            # Espera a pagina carregar completamente (os cards azuis)
             time.sleep(3)
-            logger.info("SEFAZ: Na pagina de Consulta Analise MDF-e")
-        except TimeoutException:
-            # Tenta via URL direta
-            self.driver.get("https://transportadoras.sefaz.al.gov.br/#/painel-mdfes-analisados")
+
+            # Estrategia 1: Busca especifica pelo texto "Consulta Análise MDF-e"
+            # Usa text() para nao pegar nós pai que contenham o texto em filhos
+            botao_mdfe = None
+
+            seletores = [
+                # Link ou span cujo proprio texto contem "lise MDF" (Análise MDF-e)
+                "//a[contains(text(),'lise MDF')]",
+                "//span[contains(text(),'lise MDF')]/ancestor::a",
+                "//p[contains(text(),'lise MDF')]/ancestor::a",
+                # Div com texto direto
+                "//div[contains(text(),'lise MDF')]",
+                "//span[contains(text(),'lise MDF')]",
+                # Card com texto "Consulta" e "MDF" - pega o card inteiro
+                "//a[.//text()[contains(.,'MDF')]]",
+                # Qualquer elemento clicavel com texto MDF-e
+                "//*[contains(text(),'MDF-e') and (self::a or self::button or self::span)]",
+                # Segundo card/botao azul (posicional - Consulta Analise e o do meio)
+                "(//a[contains(@class,'card') or contains(@class,'btn') or contains(@class,'panel')])[2]",
+            ]
+
+            for xpath in seletores:
+                try:
+                    elementos = self.driver.find_elements(By.XPATH, xpath)
+                    for elem in elementos:
+                        if elem.is_displayed():
+                            texto = (elem.text or "").upper()
+                            # Confirma que NAO e "Consultar TADe" nem "Registro"
+                            if "TADE" not in texto or "MDF" in texto:
+                                if "REGISTRO" not in texto:
+                                    botao_mdfe = elem
+                                    break
+                    if botao_mdfe:
+                        break
+                except Exception:
+                    continue
+
+            if botao_mdfe:
+                try:
+                    botao_mdfe.click()
+                except Exception:
+                    self.driver.execute_script("arguments[0].click();", botao_mdfe)
+                time.sleep(3)
+                logger.info("SEFAZ: Na pagina de Consulta Analise MDF-e")
+            else:
+                # Fallback: tenta via URL direta
+                logger.warning("SEFAZ: Botao 'Consulta Analise MDF-e' nao encontrado, "
+                             "tentando URL direta")
+                self.driver.get(
+                    "https://transportadoras.sefaz.al.gov.br/#/painel-mdfes-analisados"
+                )
+                time.sleep(3)
+
+        except Exception as e:
+            logger.error(f"SEFAZ: Erro ao navegar para Consulta Analise MDF-e: {e}")
+            # Fallback URL direta
+            self.driver.get(
+                "https://transportadoras.sefaz.al.gov.br/#/painel-mdfes-analisados"
+            )
             time.sleep(3)
 
     def _encontrar_campo_chave(self):
