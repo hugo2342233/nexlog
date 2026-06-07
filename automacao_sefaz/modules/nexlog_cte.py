@@ -133,43 +133,54 @@ class NexlogCTeOperacoes:
 
     def _tentar_abrir_filtro(self) -> bool:
         """
-        Tenta clicar em TODOS os botoes pequenos na pagina ate achar
-        o que abre os campos de filtro.
+        Clica no botao de filtro para mostrar os campos.
+        O botao e um icone: <i class="fal fa-filter"></i>
+        Precisa clicar no elemento PAI (button, a, ou div) do icone.
         """
         try:
-            # Busca todos os botoes/links/icones clicaveis na pagina
-            elementos = self.driver.find_elements(By.XPATH,
-                "//button | //a[contains(@class,'btn')] | //i[contains(@class,'fa')]/.."
-            )
-            for elem in elementos:
-                try:
-                    if not elem.is_displayed():
-                        continue
-                    tamanho = elem.size
-                    # Botoes de filtro sao icones pequenos
-                    if tamanho.get('width', 0) < 60 and tamanho.get('height', 0) < 60:
-                        # Tenta clicar
-                        try:
-                            elem.click()
-                        except Exception:
-                            self.driver.execute_script("arguments[0].click();", elem)
-                        time.sleep(1)
+            seletores = [
+                # 1. Icone fa-filter — clica no PAI
+                "//i[contains(@class,'fa-filter')]/parent::*",
+                # 2. Icone fa-filter — clica no proprio icone
+                "//i[contains(@class,'fa-filter')]",
+                # 3. Qualquer elemento que contenha o icone fa-filter
+                "//*[./i[contains(@class,'fa-filter')]]",
+                # 4. Botao/link que contenha icone fa-filter
+                "//button[.//i[contains(@class,'fa-filter')]]",
+                "//a[.//i[contains(@class,'fa-filter')]]",
+                # 5. Span/div que contenha icone fa-filter
+                "//span[.//i[contains(@class,'fa-filter')]]",
+                "//div[.//i[contains(@class,'fa-filter')]]",
+            ]
 
-                        # Verifica se campo apareceu
-                        if self._campo_integracao_visivel():
-                            logger.debug("Filtro aberto!")
-                            return True
-                        else:
-                            # Nao era esse - reverter clique
+            for xpath in seletores:
+                try:
+                    elementos = self.driver.find_elements(By.XPATH, xpath)
+                    for elem in elementos:
+                        if elem.is_displayed():
                             try:
                                 elem.click()
-                                time.sleep(0.3)
                             except Exception:
-                                pass
+                                self.driver.execute_script("arguments[0].click();", elem)
+                            time.sleep(1.5)
+
+                            if self._campo_integracao_visivel():
+                                logger.debug(f"Filtro aberto via: {xpath[:50]}")
+                                return True
+                            else:
+                                # Revert
+                                try:
+                                    elem.click()
+                                    time.sleep(0.5)
+                                except Exception:
+                                    pass
+                            break
                 except Exception:
                     continue
-        except Exception:
-            pass
+
+        except Exception as e:
+            logger.debug(f"Erro ao tentar abrir filtro: {e}")
+
         return False
 
     def _ler_awb_resultado(self) -> str:
