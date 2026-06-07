@@ -32,49 +32,63 @@ class NexlogLiberar:
     def configurar_filtros(self, data_inicial: str, data_final: str):
         """
         Configura os filtros da tela de Retencoes.
-        Os filtros ja vem com a base MCZ preenchida.
-        Ajusta as datas e clica em Pesquisar.
+        Baseado no script original (Liberar_retencao.py):
+        1. Ajusta data inicial para dia 01
+        2. Seleciona status "Retida" no select2
+        3. Clica Pesquisar
         """
         try:
-            # Ajusta data inicial (formato DD/MM/YYYY HH:MM)
+            # Ajusta data inicial — usa o campo StartDate
+            # O script original apenas digita "01" (dia 1 do mes)
             campo_data_ini = self.wait.until(
                 EC.element_to_be_clickable((By.XPATH,
-                    "//input[contains(@id,'StartDate') or contains(@id,'startDate') "
+                    "//*[@id='StartDate']"
+                    " | //input[contains(@id,'StartDate') or contains(@id,'startDate') "
                     "or contains(@name,'StartDate')]"
                     " | //label[contains(.,'Data inicial')]//following::input[1]"
                 ))
             )
             campo_data_ini.click()
             campo_data_ini.send_keys(Keys.CONTROL, "a")
-            # Formato com hora: DD/MM/YYYY 00:00
-            campo_data_ini.send_keys(f"{data_inicial} 00:00")
-            campo_data_ini.send_keys(Keys.TAB)
-            time.sleep(0.5)
+            campo_data_ini.send_keys("01")
+            campo_data_ini.send_keys(Keys.ENTER)
+            time.sleep(1)
 
-            # Ajusta data final
-            campo_data_fim = self.wait.until(
-                EC.element_to_be_clickable((By.XPATH,
-                    "//input[contains(@id,'EndDate') or contains(@id,'endDate') "
-                    "or contains(@name,'EndDate')]"
-                    " | //label[contains(.,'Data final')]//following::input[1]"
-                ))
-            )
-            campo_data_fim.click()
-            campo_data_fim.send_keys(Keys.CONTROL, "a")
-            campo_data_fim.send_keys(f"{data_final} 23:59")
-            campo_data_fim.send_keys(Keys.TAB)
-            time.sleep(0.5)
+            # Seleciona status "Retida" no Select2 (exatamente como script original)
+            try:
+                # Abre o Select2
+                select2_container = self.wait.until(
+                    EC.element_to_be_clickable((By.XPATH,
+                        "//span[@id='select2-Status-container']"
+                        " | //span[contains(@id,'select2') and contains(@id,'Status')]"
+                    ))
+                )
+                select2_container.click()
+                time.sleep(1)
 
-            # Clica Pesquisar
+                # Seleciona opcao "Retida"
+                opcao_retida = self.wait.until(
+                    EC.element_to_be_clickable((By.XPATH,
+                        "//li[contains(@class,'select2-results__option') "
+                        "and normalize-space()='Retida']"
+                    ))
+                )
+                opcao_retida.click()
+                time.sleep(1)
+            except Exception as e:
+                logger.warning(f"Nao conseguiu selecionar status 'Retida': {e}")
+
+            # Clica Pesquisar (botao com id searchButton ou texto)
             botao_pesquisar = self.wait.until(
                 EC.element_to_be_clickable((By.XPATH,
-                    "//button[contains(.,'Pesquisar')]"
+                    "//*[@id='searchButton']"
+                    " | //button[contains(.,'Pesquisar')]"
                 ))
             )
             botao_pesquisar.click()
             time.sleep(5)
 
-            logger.info(f"Filtros configurados: {data_inicial} ate {data_final}")
+            logger.info(f"Filtros configurados: data 01 + status Retida")
 
         except Exception as e:
             logger.error(f"Erro ao configurar filtros de retencao: {e}")
@@ -82,14 +96,19 @@ class NexlogLiberar:
 
     def selecionar_awbs_para_liberacao(self, awbs: Set[str]) -> Dict[str, str]:
         """
-        Para cada AWB na lista, pesquisa na tabela e marca o checkbox
-        APENAS se o status for "Retida".
+        Para cada AWB na lista, pesquisa no campo de filtro da DataTable
+        e seleciona usando o menu "Tudo" (exatamente como script original).
+
+        Baseado no script original (Liberar_retencao.py):
+        - Campo: //*[@id='RetentionList_filter']/label/input
+        - Menu: //div[contains(@class,'divDataTableSelection')]
+        - Opcao: //span[contains(@class,'DataTableSelectionAll')]
 
         Args:
             awbs: Set de AWBs para tentar liberar
 
         Returns:
-            Dict com resultado: {'liberados': [...], 'ja_liberados': [...], 'erros': [...]}
+            Dict com resultado
         """
         resultado = {
             "selecionados": [],
@@ -97,74 +116,71 @@ class NexlogLiberar:
             "erros": [],
         }
 
-        # Campo de pesquisa da tabela
-        # Baseado no script original (Liberar_retencao.py), o campo e:
-        # //*[@id='RetentionList_filter']/label/input
-        xpath_pesquisar = (
-            "//*[@id='RetentionList_filter']//input"
-            " | //input[contains(@class,'search') or contains(@type,'search')]"
+        # XPaths exatos do script original
+        xpath_input = (
+            "//*[@id='RetentionList_filter']/label/input"
+            " | //*[@id='RetentionList_filter']//input"
             " | //div[contains(@id,'_filter')]//input"
-            " | //label[contains(.,'Pesquisar')]//input"
-            " | //input[contains(@placeholder,'Pesquisar') or contains(@aria-label,'Pesquisar')]"
-            " | //div[contains(@class,'filter')]//input"
+            " | //input[contains(@type,'search')]"
         )
+        xpath_menu = "//div[contains(@class,'divDataTableSelection')]"
+        xpath_opcao_tudo = "//span[contains(@class,'DataTableSelectionAll')]"
 
         for awb in awbs:
             try:
-                # Pesquisa o AWB no campo de filtro da tabela
+                # 1. Espera o campo de filtro
                 campo = self.wait.until(
-                    EC.element_to_be_clickable((By.XPATH, xpath_pesquisar))
+                    EC.element_to_be_clickable((By.XPATH, xpath_input))
                 )
+
+                # 2. Limpa e digita o AWB
                 campo.click()
                 campo.send_keys(Keys.CONTROL, "a")
                 campo.send_keys(Keys.BACKSPACE)
                 campo.send_keys(awb)
-                time.sleep(2)
 
-                # Verifica se encontrou resultados
+                logger.debug(f"AWB digitado: {awb}")
+                time.sleep(2)  # Tempo para a tabela filtrar
+
+                # 3. Verifica se a tabela tem resultados
+                # Se filtrou e nao tem linhas, AWB ja foi liberado
                 try:
-                    sem_registro = self.driver.find_element(By.XPATH,
-                        "//*[contains(.,'Nenhum registro') or contains(.,'0 de 0')]"
+                    linhas = self.driver.find_elements(By.XPATH,
+                        "//table[@id='RetentionList']//tbody//tr"
+                        " | //table//tbody//tr"
                     )
-                    if sem_registro.is_displayed():
-                        # AWB nao encontrado = ja liberado/retirado
+                    # Verifica se tem a mensagem "Nenhum registro"
+                    tem_resultado = False
+                    for linha in linhas:
+                        texto = linha.text.strip()
+                        if texto and "nenhum" not in texto.lower() and "empty" not in texto.lower():
+                            tem_resultado = True
+                            break
+
+                    if not tem_resultado:
                         resultado["ja_liberados"].append(awb)
                         logger.info(f"AWB {awb}: nao encontrado (ja liberado/retirado)")
                         continue
-                except NoSuchElementException:
+                except Exception:
                     pass
 
-                # Encontrou resultados - verifica status e marca checkboxes
-                linhas = self.driver.find_elements(By.XPATH, "//table//tbody//tr")
+                # 4. Clica no menu de selecao (exatamente como script original)
+                menu = self.wait.until(
+                    EC.element_to_be_clickable((By.XPATH, xpath_menu))
+                )
+                menu.click()
 
-                for linha in linhas:
-                    try:
-                        texto_linha = linha.text.upper()
+                # 5. Clica em "Tudo" (seleciona todas as linhas filtradas)
+                opcao = self.wait.until(
+                    EC.visibility_of_element_located((By.XPATH, xpath_opcao_tudo))
+                )
+                opcao.click()
 
-                        # Verifica o status
-                        if "RETIDA" in texto_linha and "PARCIALMENTE" not in texto_linha:
-                            # Status "Retida" - MARCA o checkbox
-                            checkbox = linha.find_element(By.XPATH,
-                                ".//input[@type='checkbox']"
-                            )
-                            if not checkbox.is_selected():
-                                try:
-                                    checkbox.click()
-                                except Exception:
-                                    self.driver.execute_script(
-                                        "arguments[0].click();", checkbox
-                                    )
-                                time.sleep(0.5)
-
-                        elif "LIBERADA" in texto_linha or "PARCIALMENTE" in texto_linha:
-                            # Ja liberada ou parcialmente - NAO marca
-                            logger.debug(f"AWB {awb}: linha com status liberada/parcial - pulando")
-
-                    except Exception as e:
-                        logger.debug(f"Erro ao processar linha para AWB {awb}: {e}")
-
+                logger.info(f"AWB {awb}: selecionado (menu 'Tudo' clicado)")
                 resultado["selecionados"].append(awb)
-                logger.info(f"AWB {awb}: selecionado para liberacao")
+
+                # Pausa entre AWBs
+                time.sleep(2)
 
             except TimeoutException:
                 resultado["erros"].append(awb)
