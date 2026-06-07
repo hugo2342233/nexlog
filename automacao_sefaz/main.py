@@ -471,6 +471,8 @@ class AppAutomacao:
         outlook.voltar_para_nexlog()
 
         # --- ETAPA 5: Adicionar comentarios nos CTes retidos ---
+        mapa_cte_awb = {}  # Mapeamento CTe -> AWB (usado na etapa 6 para filtrar)
+
         if consulta and consulta.termos:
             self._log(f"  [5/6] Adicionando comentarios ({len(consulta.ctes_retidos)} CTes)...")
 
@@ -479,6 +481,7 @@ class AppAutomacao:
                 awb = cte_mod.buscar_awb_do_cte(cte)
 
                 if awb:
+                    mapa_cte_awb[cte] = awb  # Salva mapeamento para etapa 6
                     sucesso = cte_mod.adicionar_comentario_critico(awb, comentario)
                     if sucesso:
                         resultado.comentarios_adicionados += 1
@@ -501,17 +504,29 @@ class AppAutomacao:
 
         if manifesto:
             if resposta == RespostaEmail.SEM_TERMOS:
-                # Libera todos RETIRA
+                # Libera todos RETIRA (nao tem termos)
                 awbs_para_liberar = manifesto.awbs_retira.copy()
-            elif consulta:
-                # Identifica AWBs com termo (precisa mapear CTe -> AWB)
-                # Os AWBs com termo ja foram identificados no loop de comentarios
-                # Por seguranca, nao libera nenhum que tenha CTe com termo
+            elif consulta and consulta.termos:
+                # TEM termos — precisa excluir AWBs retidos pela SEFAZ
+                # Usa o mapeamento CTe->AWB da etapa de comentarios
+                # para saber quais AWBs NÃO devem ser liberados
                 ctes_retidos = set(consulta.ctes_retidos)
-                # Remove AWBs que tem CTe retido (consulta pelo campo)
-                awbs_para_liberar = manifesto.awbs_retira.copy()
-                # TODO: melhorar mapeamento CTe->AWB para filtrar corretamente
+
+                # Coleta AWBs que tem termo (foram mapeados na etapa 5)
+                for cte in ctes_retidos:
+                    awb = mapa_cte_awb.get(cte, "")
+                    if awb:
+                        awbs_com_termo.add(awb)
+                        self._log(f"    AWB {awb} (CTe {cte}) -> RETIDO (nao libera)")
+
+                # Libera apenas RETIRA que NAO tem termo
+                awbs_para_liberar = manifesto.awbs_retira - awbs_com_termo
+
+                if awbs_com_termo:
+                    self._log(f"  {len(awbs_com_termo)} AWB(s) com termo (nao libera)")
+                    resultado.awbs_retidos = list(awbs_com_termo)
             else:
+                # Sem consulta ou consulta sem termos — libera todos RETIRA
                 awbs_para_liberar = manifesto.awbs_retira.copy()
 
             resultado.awbs_domicilio = list(manifesto.awbs_entrega)

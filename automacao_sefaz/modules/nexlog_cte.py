@@ -34,67 +34,53 @@ class NexlogCTeOperacoes:
         Fluxo: Vendas > Conhecimento > Lista > Aba 'Por referencia'
                > Campo 'Numero integracao' > Pesquisar > Le 'N. documento'
 
+        IMPORTANTE: NAO recarrega a pagina entre buscas.
+        Apenas clica no botao toogleFilter se o campo estiver oculto.
+
         Returns:
             Numero do AWB (127...) ou "" se nao encontrar
         """
         try:
-            # SEMPRE renavega para Conhecimento/Lista (reseta a pagina)
-            self.browser.navegar_vendas_conhecimento_lista()
-            time.sleep(3)
+            # Garante que estamos na aba principal do Nexlog
+            self.browser.voltar_aba_principal()
+            time.sleep(1)
 
-            # Clica na aba "Por referencia"
-            aba_referencia = self.wait.until(
-                EC.element_to_be_clickable((By.XPATH,
-                    "//a[contains(.,'Por refer') or contains(.,'por refer')]"
-                    " | //a[text()='Por referência']"
-                ))
-            )
-            aba_referencia.click()
-            time.sleep(3)
+            # Verifica se estamos na pagina certa (URL contem TransportOrder)
+            url_atual = self.driver.current_url or ""
+            if "TransportOrder" not in url_atual:
+                # Nao estamos na pagina — navega
+                self.browser.navegar_vendas_conhecimento_lista()
+                time.sleep(3)
+                # Clica na aba "Por referencia"
+                aba_referencia = self.wait.until(
+                    EC.element_to_be_clickable((By.XPATH,
+                        "//a[contains(.,'Por refer') or contains(.,'por refer')]"
+                        " | //a[text()='Por referência']"
+                    ))
+                )
+                aba_referencia.click()
+                time.sleep(3)
 
-            # Verifica se campo esta visivel
+            # Verifica se campo esta visivel, se nao clica no filtro
             if not self._campo_integracao_visivel():
-                # Tenta abrir filtro via JavaScript (clica no pai do i.fa-filter)
-                logger.debug("Campo nao visivel, tentando abrir filtro via JS...")
+                logger.debug("Campo nao visivel, clicando em toogleFilter...")
                 self._tentar_abrir_filtro()
                 time.sleep(2)
 
+            # Se AINDA nao esta visivel, tenta clicar na aba "Por referencia" primeiro
             if not self._campo_integracao_visivel():
-                # FALLBACK: forca exibicao via JavaScript
-                # Expande qualquer container colapsado que contenha o campo
-                logger.warning("Filtro nao abriu - forcando exibicao via JS...")
-                self.driver.execute_script("""
-                    // Busca containers colapsados e expande os que tem 'integra'
-                    var els = document.querySelectorAll('.collapse, [style*="display: none"], [style*="display:none"], .panel-collapse');
-                    for (var i = 0; i < els.length; i++) {
-                        var el = els[i];
-                        var txt = (el.textContent || '').toLowerCase();
-                        if (txt.indexOf('integra') !== -1 || txt.indexOf('pesquisar') !== -1) {
-                            el.style.display = 'block';
-                            el.style.height = 'auto';
-                            el.style.overflow = 'visible';
-                            el.classList.add('show');
-                            el.classList.add('in');
-                            el.classList.remove('collapsing');
-                        }
-                    }
-                    // Busca inputs hidden com 'Integration' e mostra seus parents
-                    var inputs = document.querySelectorAll('input[id*="Integration"], input[name*="Integration"]');
-                    for (var j = 0; j < inputs.length; j++) {
-                        var input = inputs[j];
-                        var parent = input.parentElement;
-                        while (parent && parent !== document.body) {
-                            if (parent.style.display === 'none' || parent.classList.contains('collapse')) {
-                                parent.style.display = 'block';
-                                parent.style.height = 'auto';
-                                parent.classList.add('show');
-                                parent.classList.add('in');
-                            }
-                            parent = parent.parentElement;
-                        }
-                    }
-                """)
-                time.sleep(2)
+                logger.debug("Tentando clicar na aba Por referencia...")
+                try:
+                    aba = self.driver.find_element(By.XPATH,
+                        "//a[contains(.,'Por refer')]"
+                    )
+                    aba.click()
+                    time.sleep(2)
+                    # Tenta filtro de novo
+                    self._tentar_abrir_filtro()
+                    time.sleep(2)
+                except Exception:
+                    pass
 
             # Preenche campo "Numero integracao"
             campo_integracao = self.wait.until(
