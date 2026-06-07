@@ -169,8 +169,23 @@ class NexlogBrowser:
         except Exception:
             pass
 
+    def voltar_aba_principal(self):
+        """
+        Volta para a primeira aba do navegador (aba do Nexlog).
+        Outras abas podem ser do Outlook ou SEFAZ.
+        """
+        try:
+            abas = self.driver.window_handles
+            if abas:
+                self.driver.switch_to.window(abas[0])
+        except Exception:
+            pass
+
     def navegar_url(self, url: str):
         """Navega diretamente para uma URL do Nexlog."""
+        # Garante que estamos na aba principal (Nexlog)
+        self.voltar_aba_principal()
+        self._fechar_modais()
         self.driver.get(url)
         time.sleep(3)
 
