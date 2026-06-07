@@ -153,33 +153,42 @@ class NexlogVoos:
         """
         Extrai a chave do MDF-e de um voo.
         Fluxo: Clica em Acoes > Visualizar integracao MDFe > Le a coluna 'Chave'
+        
+        Busca o voo na tabela pelo numero de controle (nao pelo indice,
+        pois o indice pode mudar entre pesquisas).
         """
         try:
-            # Clica no botao de acoes (setinha) do voo
-            linhas = self.driver.find_elements(By.XPATH, "//table//tbody//tr")
-            if voo.indice_tabela >= len(linhas):
-                logger.error(f"Indice do voo {voo.numero_controle} fora do range")
+            # Localiza a linha do voo pelo numero de controle
+            linha = self._encontrar_linha_voo(voo.numero_controle)
+            if linha is None:
+                logger.error(f"Voo {voo.numero_controle} nao encontrado na tabela")
                 return ""
 
-            linha = linhas[voo.indice_tabela]
-
-            # Procura o botao de acoes na ultima coluna
-            botao_acoes = linha.find_element(By.XPATH,
-                ".//td[last()]//button | .//td[last()]//a | "
-                ".//td[last()]//*[contains(@class,'dropdown') or contains(@class,'action')]"
-            )
+            # Procura o botao de acoes na ultima coluna (setinha/dropdown)
+            try:
+                botao_acoes = linha.find_element(By.XPATH,
+                    ".//td[last()]//button | .//td[last()]//a[contains(@class,'dropdown')] "
+                    "| .//td[last()]//*[contains(@class,'btn')] "
+                    "| .//td[last()]//*[contains(@class,'action')] "
+                    "| .//td[last()]//i[contains(@class,'fa')]/.."
+                )
+            except Exception:
+                # Tenta clicar no ultimo td diretamente
+                botao_acoes = linha.find_element(By.XPATH, ".//td[last()]")
+            
             botao_acoes.click()
-            time.sleep(1)
+            time.sleep(2)
 
             # Clica em "Visualizar integracao MDFe"
             opcao_mdfe = self.wait.until(
                 EC.element_to_be_clickable((By.XPATH,
-                    "//*[contains(.,'Visualizar integra') and contains(.,'MDFe')]"
+                    "//*[contains(text(),'Visualizar integra') and contains(text(),'MDFe')]"
+                    " | //a[contains(text(),'Visualizar integra')]"
                     " | //a[contains(.,'integra') and contains(.,'MDFe')]"
                 ))
             )
             opcao_mdfe.click()
-            time.sleep(4)
+            time.sleep(5)
 
             # Le a chave da tabela no modal
             chave = self._ler_chave_modal()
@@ -191,39 +200,67 @@ class NexlogVoos:
 
         except Exception as e:
             logger.error(f"Erro ao extrair chave MDF-e do voo {voo.numero_controle}: {e}")
+            self._fechar_modal_integracao()
             return ""
+
+    def _encontrar_linha_voo(self, numero_controle: str):
+        """
+        Encontra a linha da tabela que contem o voo pelo numero de controle.
+        Busca pelo texto (ex: 'G3 1704') dentro das linhas da tabela.
+        """
+        try:
+            linhas = self.driver.find_elements(By.XPATH, "//table//tbody//tr")
+            for linha in linhas:
+                texto_linha = linha.text
+                # Remove espacos extras para comparacao
+                num_limpo = numero_controle.replace(" ", "")
+                texto_limpo = texto_linha.replace(" ", "")
+                if num_limpo in texto_limpo or numero_controle in texto_linha:
+                    return linha
+            return None
+        except Exception:
+            return None
 
     def _ler_chave_modal(self) -> str:
         """Le a chave do MDF-e no modal de Integracao MDFe."""
         try:
-            # Aguarda modal abrir e tabela carregar
+            # Aguarda modal abrir (titulo "Integracao MDFe")
             self.wait.until(
                 EC.presence_of_element_located((By.XPATH,
-                    "//div[contains(@class,'modal')]//table//tbody//tr"
+                    "//*[contains(text(),'Integra') and contains(text(),'MDFe')]"
+                    " | //div[contains(@class,'modal') and contains(@class,'show')]"
+                    " | //div[contains(@class,'modal')]//table"
                 ))
             )
-            time.sleep(2)
+            time.sleep(3)
 
-            # A chave esta na coluna "Chave" da tabela
-            # Busca por celula que contenha 44 digitos
-            celulas = self.driver.find_elements(By.XPATH,
-                "//div[contains(@class,'modal')]//table//tbody//tr//td"
-            )
-            for celula in celulas:
-                texto = celula.text.strip()
-                if len(texto) == 44 and texto.isdigit():
-                    logger.info(f"Chave MDF-e encontrada: {texto[:20]}...")
-                    return texto
-
-            # Alternativa: busca na pagina toda por 44 digitos
+            # Busca por texto de 44 digitos na pagina inteira (mais robusto)
             page_text = self.driver.find_element(By.TAG_NAME, "body").text
             match = re.search(r'\b(\d{44})\b', page_text)
             if match:
-                return match.group(1)
+                chave = match.group(1)
+                logger.info(f"Chave MDF-e encontrada: {chave[:20]}...")
+                return chave
+
+            # Alternativa: busca em celulas da tabela do modal
+            try:
+                celulas = self.driver.find_elements(By.XPATH,
+                    "//div[contains(@class,'modal')]//td"
+                )
+                for celula in celulas:
+                    texto = celula.text.strip()
+                    if len(texto) == 44 and texto.isdigit():
+                        logger.info(f"Chave MDF-e encontrada (celula): {texto[:20]}...")
+                        return texto
+            except Exception:
+                pass
 
             logger.warning("Chave MDF-e nao encontrada no modal")
             return ""
 
+        except TimeoutException:
+            logger.error("Timeout aguardando modal de Integracao MDFe")
+            return ""
         except Exception as e:
             logger.error(f"Erro ao ler chave do modal: {e}")
             return ""
