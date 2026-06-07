@@ -41,7 +41,7 @@ class Config:
     # URLs
     url_nexlog: str = "https://golcargo.nexlog.com/account/#/login"
     url_sefaz: str = "https://transportadoras.sefaz.al.gov.br/#/"
-    url_outlook: str = "https://outlook.cloud.microsoft.com/mail/"
+    url_outlook: str = "https://outlook.cloud.microsoft/mail/mczfk@voegol.com.br/"
 
     # Timeouts (segundos)
     timeout_padrao: int = 20
