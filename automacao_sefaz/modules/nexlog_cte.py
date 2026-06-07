@@ -34,17 +34,11 @@ class NexlogCTeOperacoes:
         Fluxo: Vendas > Conhecimento > Lista > Aba 'Por referencia'
                > Campo 'Numero integracao' > Pesquisar > Le 'N. documento'
 
-        IMPORTANTE: SEMPRE renavega para a pagina antes de buscar.
-        Apos pesquisar, os campos de filtro ficam ocultos e o botao
-        de filtro nao esta sendo encontrado pelos seletores.
-        A forma mais segura e simplesmente recarregar a pagina.
-
         Returns:
             Numero do AWB (127...) ou "" se nao encontrar
         """
         try:
             # SEMPRE renavega para Conhecimento/Lista (reseta a pagina)
-            # Isso garante que os campos de filtro estejam visiveis
             self.browser.navegar_vendas_conhecimento_lista()
             time.sleep(3)
 
@@ -56,7 +50,32 @@ class NexlogCTeOperacoes:
                 ))
             )
             aba_referencia.click()
-            time.sleep(2)
+            time.sleep(3)
+
+            # Verifica se campo esta visivel, se nao tenta abrir filtro
+            campo_visivel = self._campo_integracao_visivel()
+
+            if not campo_visivel:
+                # Tenta clicar em qualquer elemento que possa ser o filtro
+                logger.debug("Campo integracao nao visivel apos navegacao, tentando filtro...")
+                campo_visivel = self._tentar_abrir_filtro()
+
+            if not campo_visivel:
+                # ULTIMO RECURSO: refresh da pagina (F5) e tenta de novo
+                logger.warning("Campo AINDA nao visivel - fazendo refresh...")
+                self.driver.refresh()
+                time.sleep(4)
+                # Clica na aba de novo
+                try:
+                    aba_ref2 = self.wait.until(
+                        EC.element_to_be_clickable((By.XPATH,
+                            "//a[contains(.,'Por refer')]"
+                        ))
+                    )
+                    aba_ref2.click()
+                    time.sleep(3)
+                except Exception:
+                    pass
 
             # Preenche campo "Numero integracao"
             campo_integracao = self.wait.until(
@@ -99,117 +118,59 @@ class NexlogCTeOperacoes:
             logger.error(f"Erro ao buscar AWB do CTe {numero_cte}: {e}")
             return ""
 
-    def _garantir_campo_integracao_visivel(self):
-        """
-        Garante que o campo 'Numero integracao' esta visivel.
-        Se nao estiver, clica no botao de filtro para mostrar.
-        
-        No Nexlog (Conhecimento/Lista), apos pesquisar os campos somem.
-        O botao de filtro e um icone de funil na barra superior,
-        proximo ao badge "Filtro aplicado".
-        """
-        campo_visivel = False
+    def _campo_integracao_visivel(self) -> bool:
+        """Verifica se o campo Numero integracao esta visivel."""
         try:
-            campo_teste = self.driver.find_element(By.XPATH,
+            campo = self.driver.find_element(By.XPATH,
                 "//input[contains(@id,'Integration') or contains(@name,'Integration') "
                 "or contains(@id,'integration')]"
                 " | //label[contains(.,'integra')]//following::input[1]"
                 " | //input[contains(@placeholder,'integra')]"
             )
-            campo_visivel = campo_teste.is_displayed()
+            return campo.is_displayed()
         except Exception:
-            campo_visivel = False
+            return False
 
-        if not campo_visivel:
-            logger.debug("Campo integracao NAO visivel - tentando abrir filtro...")
-            
-            # Estrategias para encontrar o botao de filtro no Nexlog
-            seletores_filtro = [
-                # 1. Icone fa-filter — elemento pai clicavel
-                "//*[contains(@class,'fa-filter')]/ancestor::button",
-                "//*[contains(@class,'fa-filter')]/ancestor::a",
-                "//*[contains(@class,'fa-filter')]/..",
-                "//*[contains(@class,'fa-filter')]",
-                # 2. Glyphicon filter
-                "//*[contains(@class,'glyphicon-filter')]/ancestor::button",
-                "//*[contains(@class,'glyphicon-filter')]/..",
-                "//*[contains(@class,'glyphicon-filter')]",
-                # 3. Proximo ao badge "Filtro aplicado"
-                "//*[contains(text(),'Filtro aplicado')]/ancestor::div[1]//button",
-                "//*[contains(text(),'Filtro aplicado')]/preceding-sibling::*[self::button or self::a]",
-                "//*[contains(text(),'Filtro aplicado')]/following-sibling::*[self::button or self::a]",
-                "//*[contains(text(),'Filtro aplicado')]/..",
-                # 4. Barra de ferramentas / panel heading
-                "//div[contains(@class,'panel-heading') or contains(@class,'card-header') "
-                "or contains(@class,'toolbar')]//button",
-                "//div[contains(@class,'panel-heading') or contains(@class,'card-header') "
-                "or contains(@class,'toolbar')]//a[contains(@class,'btn')]",
-                # 5. Botao/link com classe filter
-                "//button[contains(@class,'filter')]",
-                "//a[contains(@class,'filter')]",
-                # 6. Botao com title filtro
-                "//button[contains(@title,'iltro') or contains(@title,'ilter')]",
-                "//a[contains(@title,'iltro') or contains(@title,'ilter')]",
-                # 7. data-toggle collapse com filter
-                "//*[@data-toggle='collapse'][contains(@href,'ilter') "
-                "or contains(@data-target,'ilter')]",
-                # 8. aria-label
-                "//*[contains(@aria-label,'iltro') or contains(@aria-label,'ilter')]",
-                # 9. Icone SVG ou span com icone
-                "//span[contains(@class,'icon') and contains(@class,'filter')]/..",
-                # 10. Qualquer i (icone) que parece filtro
-                "//i[contains(@class,'filter') or contains(@class,'funnel')]/..",
-            ]
-            
-            for xpath in seletores_filtro:
+    def _tentar_abrir_filtro(self) -> bool:
+        """
+        Tenta clicar em TODOS os botoes pequenos na pagina ate achar
+        o que abre os campos de filtro.
+        """
+        try:
+            # Busca todos os botoes/links/icones clicaveis na pagina
+            elementos = self.driver.find_elements(By.XPATH,
+                "//button | //a[contains(@class,'btn')] | //i[contains(@class,'fa')]/.."
+            )
+            for elem in elementos:
                 try:
-                    elementos = self.driver.find_elements(By.XPATH, xpath)
-                    for elem in elementos:
-                        if elem.is_displayed():
+                    if not elem.is_displayed():
+                        continue
+                    tamanho = elem.size
+                    # Botoes de filtro sao icones pequenos
+                    if tamanho.get('width', 0) < 60 and tamanho.get('height', 0) < 60:
+                        # Tenta clicar
+                        try:
+                            elem.click()
+                        except Exception:
+                            self.driver.execute_script("arguments[0].click();", elem)
+                        time.sleep(1)
+
+                        # Verifica se campo apareceu
+                        if self._campo_integracao_visivel():
+                            logger.debug("Filtro aberto!")
+                            return True
+                        else:
+                            # Nao era esse - reverter clique
                             try:
                                 elem.click()
+                                time.sleep(0.3)
                             except Exception:
-                                self.driver.execute_script("arguments[0].click();", elem)
-                            time.sleep(1.5)
-                            
-                            # Verifica se o campo apareceu
-                            try:
-                                campo_teste2 = self.driver.find_element(By.XPATH,
-                                    "//input[contains(@id,'Integration') or "
-                                    "contains(@name,'Integration') or "
-                                    "contains(@id,'integration')]"
-                                    " | //label[contains(.,'integra')]//following::input[1]"
-                                    " | //input[contains(@placeholder,'integra')]"
-                                )
-                                if campo_teste2.is_displayed():
-                                    logger.debug(f"Filtro aberto via: {xpath[:50]}")
-                                    return
-                                else:
-                                    # Nao apareceu — clica de novo pra reverter
-                                    try:
-                                        elem.click()
-                                        time.sleep(0.5)
-                                    except Exception:
-                                        pass
-                            except Exception:
-                                # Campo nao no DOM — reverter
-                                try:
-                                    elem.click()
-                                    time.sleep(0.5)
-                                except Exception:
-                                    pass
-                            break
+                                pass
                 except Exception:
                     continue
-            
-            # FALLBACK: Se nada funcionou, renavega para a pagina
-            # Isso reseta a view e mostra os campos novamente
-            logger.warning("NAO conseguiu abrir o filtro! Renavegando para Conhecimento/Lista...")
-            try:
-                self.browser.navegar_vendas_conhecimento_lista()
-                time.sleep(3)
-            except Exception:
-                pass
+        except Exception:
+            pass
+        return False
 
     def _ler_awb_resultado(self) -> str:
         """Le o AWB (N. documento) da primeira linha da tabela de resultados."""
