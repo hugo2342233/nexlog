@@ -135,52 +135,71 @@ class NexlogCTeOperacoes:
         """
         Clica no botao de filtro para mostrar os campos.
         O botao e um icone: <i class="fal fa-filter"></i>
-        Precisa clicar no elemento PAI (button, a, ou div) do icone.
+        
+        Usa JavaScript direto para encontrar e clicar, pois XPaths
+        normais nao estao funcionando neste caso.
         """
         try:
-            seletores = [
-                # 1. Icone fa-filter — clica no PAI
-                "//i[contains(@class,'fa-filter')]/parent::*",
-                # 2. Icone fa-filter — clica no proprio icone
-                "//i[contains(@class,'fa-filter')]",
-                # 3. Qualquer elemento que contenha o icone fa-filter
-                "//*[./i[contains(@class,'fa-filter')]]",
-                # 4. Botao/link que contenha icone fa-filter
-                "//button[.//i[contains(@class,'fa-filter')]]",
-                "//a[.//i[contains(@class,'fa-filter')]]",
-                # 5. Span/div que contenha icone fa-filter
-                "//span[.//i[contains(@class,'fa-filter')]]",
-                "//div[.//i[contains(@class,'fa-filter')]]",
-            ]
+            # ESTRATEGIA 1: JavaScript direto — mais confiavel
+            clicou = self.driver.execute_script("""
+                var icones = document.querySelectorAll('i.fa-filter, i[class*="fa-filter"]');
+                for (var i = 0; i < icones.length; i++) {
+                    var icone = icones[i];
+                    var pai = icone.parentElement;
+                    if (pai) { pai.click(); return true; }
+                }
+                if (icones.length > 0) { icones[0].click(); return true; }
+                return false;
+            """)
 
-            for xpath in seletores:
+            if clicou:
+                time.sleep(2)
+                if self._campo_integracao_visivel():
+                    logger.debug("Filtro aberto via JavaScript (fa-filter)")
+                    return True
+
+            # ESTRATEGIA 2: CSS Selector
+            for css in ["i.fa-filter", "i[class*='fa-filter']", ".fa-filter"]:
                 try:
-                    elementos = self.driver.find_elements(By.XPATH, xpath)
+                    elementos = self.driver.find_elements(By.CSS_SELECTOR, css)
                     for elem in elementos:
-                        if elem.is_displayed():
-                            try:
-                                elem.click()
-                            except Exception:
-                                self.driver.execute_script("arguments[0].click();", elem)
-                            time.sleep(1.5)
-
+                        pai = self.driver.execute_script(
+                            "return arguments[0].parentElement;", elem
+                        )
+                        if pai:
+                            self.driver.execute_script("arguments[0].click();", pai)
+                            time.sleep(2)
                             if self._campo_integracao_visivel():
-                                logger.debug(f"Filtro aberto via: {xpath[:50]}")
+                                logger.debug(f"Filtro aberto via CSS: {css}")
                                 return True
-                            else:
-                                # Revert
-                                try:
-                                    elem.click()
-                                    time.sleep(0.5)
-                                except Exception:
-                                    pass
-                            break
                 except Exception:
                     continue
+
+            # ESTRATEGIA 3: Busca qualquer coisa com 'filter' na classe via JS
+            clicou2 = self.driver.execute_script("""
+                var todos = document.querySelectorAll('*');
+                for (var i = 0; i < todos.length; i++) {
+                    var el = todos[i];
+                    var cls = (el.className || '').toString().toLowerCase();
+                    if (cls.indexOf('filter') !== -1 && cls.indexOf('fa') !== -1) {
+                        var pai = el.parentElement;
+                        if (pai) { pai.click(); return true; }
+                        el.click(); return true;
+                    }
+                }
+                return false;
+            """)
+
+            if clicou2:
+                time.sleep(2)
+                if self._campo_integracao_visivel():
+                    logger.debug("Filtro aberto via JS generico")
+                    return True
 
         except Exception as e:
             logger.debug(f"Erro ao tentar abrir filtro: {e}")
 
+        logger.warning("NAO conseguiu abrir o filtro!")
         return False
 
     def _ler_awb_resultado(self) -> str:
