@@ -34,6 +34,9 @@ class NexlogCTeOperacoes:
         Fluxo: Vendas > Conhecimento > Lista > Aba 'Por referencia'
                > Campo 'Numero integracao' > Pesquisar > Le 'N. documento'
 
+        IMPORTANTE: Apos cada pesquisa, os campos de filtro ficam OCULTOS.
+        Precisa clicar no botao de filtro para mostrar novamente.
+
         Returns:
             Numero do AWB (127...) ou "" se nao encontrar
         """
@@ -48,33 +51,9 @@ class NexlogCTeOperacoes:
             aba_referencia.click()
             time.sleep(2)
 
-            # Verifica se o campo de integracao JA esta visivel ANTES de tocar no filtro
-            # O botao de filtro e um TOGGLE - se os campos ja estao visiveis,
-            # clicar nele VAI ESCONDER os campos!
-            campo_visivel = False
-            try:
-                campo_teste = self.driver.find_element(By.XPATH,
-                    "//input[contains(@id,'Integration') or contains(@name,'Integration') "
-                    "or contains(@id,'integration')]"
-                    " | //label[contains(.,'integra')]//following::input[1]"
-                    " | //input[contains(@placeholder,'integra')]"
-                )
-                campo_visivel = campo_teste.is_displayed()
-            except Exception:
-                pass
-
-            if not campo_visivel:
-                # Campo NAO esta visivel - clica no filtro para MOSTRAR
-                try:
-                    filtro_btn = self.driver.find_element(By.XPATH,
-                        "//button[contains(@class,'filter')] | "
-                        "//*[contains(@class,'fa-filter')]/.."
-                    )
-                    if filtro_btn.is_displayed():
-                        filtro_btn.click()
-                        time.sleep(1)
-                except Exception:
-                    pass
+            # SEMPRE verifica se o campo esta visivel e clica no filtro se necessario.
+            # Apos "Pesquisar", os campos de filtro ESCONDEM automaticamente.
+            self._garantir_campo_integracao_visivel()
 
             # Preenche campo "Numero integracao"
             campo_integracao = self.wait.until(
@@ -116,6 +95,45 @@ class NexlogCTeOperacoes:
         except Exception as e:
             logger.error(f"Erro ao buscar AWB do CTe {numero_cte}: {e}")
             return ""
+
+    def _garantir_campo_integracao_visivel(self):
+        """
+        Garante que o campo 'Numero integracao' esta visivel.
+        Se nao estiver, clica no botao de filtro para mostrar.
+        
+        O botao de filtro e um TOGGLE:
+        - Se campos OCULTOS -> clica -> campos APARECEM
+        - Se campos VISIVEIS -> clica -> campos SOMEM (NAO queremos isso!)
+        
+        Por isso, so clica se o campo NAO esta visivel.
+        """
+        campo_visivel = False
+        try:
+            campo_teste = self.driver.find_element(By.XPATH,
+                "//input[contains(@id,'Integration') or contains(@name,'Integration') "
+                "or contains(@id,'integration')]"
+                " | //label[contains(.,'integra')]//following::input[1]"
+                " | //input[contains(@placeholder,'integra')]"
+            )
+            campo_visivel = campo_teste.is_displayed()
+        except Exception:
+            campo_visivel = False
+
+        if not campo_visivel:
+            # Clica no botao de filtro para MOSTRAR os campos
+            try:
+                filtro_btn = self.driver.find_element(By.XPATH,
+                    "//button[contains(@class,'filter')] "
+                    "| //*[contains(@class,'fa-filter')]/.."
+                    "| //button[contains(@title,'iltro') or contains(@title,'ilter')]"
+                    "| //a[contains(@class,'filter')]"
+                )
+                if filtro_btn.is_displayed():
+                    filtro_btn.click()
+                    time.sleep(1.5)
+                    logger.debug("Clicou no botao de filtro para mostrar campos")
+            except Exception as e:
+                logger.debug(f"Botao de filtro nao encontrado: {e}")
 
     def _ler_awb_resultado(self) -> str:
         """Le o AWB (N. documento) da primeira linha da tabela de resultados."""
