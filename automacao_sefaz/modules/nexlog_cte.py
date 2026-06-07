@@ -34,13 +34,20 @@ class NexlogCTeOperacoes:
         Fluxo: Vendas > Conhecimento > Lista > Aba 'Por referencia'
                > Campo 'Numero integracao' > Pesquisar > Le 'N. documento'
 
-        IMPORTANTE: Apos cada pesquisa, os campos de filtro ficam OCULTOS.
-        Precisa clicar no botao de filtro para mostrar novamente.
+        IMPORTANTE: SEMPRE renavega para a pagina antes de buscar.
+        Apos pesquisar, os campos de filtro ficam ocultos e o botao
+        de filtro nao esta sendo encontrado pelos seletores.
+        A forma mais segura e simplesmente recarregar a pagina.
 
         Returns:
             Numero do AWB (127...) ou "" se nao encontrar
         """
         try:
+            # SEMPRE renavega para Conhecimento/Lista (reseta a pagina)
+            # Isso garante que os campos de filtro estejam visiveis
+            self.browser.navegar_vendas_conhecimento_lista()
+            time.sleep(3)
+
             # Clica na aba "Por referencia"
             aba_referencia = self.wait.until(
                 EC.element_to_be_clickable((By.XPATH,
@@ -50,10 +57,6 @@ class NexlogCTeOperacoes:
             )
             aba_referencia.click()
             time.sleep(2)
-
-            # SEMPRE verifica se o campo esta visivel e clica no filtro se necessario.
-            # Apos "Pesquisar", os campos de filtro ESCONDEM automaticamente.
-            self._garantir_campo_integracao_visivel()
 
             # Preenche campo "Numero integracao"
             campo_integracao = self.wait.until(

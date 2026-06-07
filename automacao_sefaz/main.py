@@ -473,8 +473,6 @@ class AppAutomacao:
         # --- ETAPA 5: Adicionar comentarios nos CTes retidos ---
         if consulta and consulta.termos:
             self._log(f"  [5/6] Adicionando comentarios ({len(consulta.ctes_retidos)} CTes)...")
-            browser.navegar_vendas_conhecimento_lista()
-            time.sleep(2)
 
             for cte in set(consulta.ctes_retidos):
                 comentario = consulta.comentario_para_cte(cte)
