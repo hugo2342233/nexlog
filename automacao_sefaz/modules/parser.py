@@ -80,12 +80,17 @@ def extrair_termos(texto: str) -> List[TermoApreensao]:
     """
     Extrai todos os termos de apreensao do texto do relatorio.
     Usa abordagem por linhas para maior robustez.
+    
+    Formatos conhecidos de CTe no relatorio:
+    - "CTe 7398054" / "CT-e 7398054" / "CTE: 7398054"
+    - Pode estar em colunas separadas (numero | situacao | data | NF-e | CT-e)
+    - Pode estar em linhas adjacentes ao termo
     """
     termos = []
     linhas = texto.split('\n')
     tipo_atual = TipoFielDepositario.TRANSPORTADORA
 
-    for linha in linhas:
+    for i, linha in enumerate(linhas):
         linha_upper = linha.upper().strip()
 
         # Detecta mudanca de secao
@@ -97,15 +102,27 @@ def extrair_termos(texto: str) -> List[TermoApreensao]:
             tipo_atual = TipoFielDepositario.DESTINATARIO
             continue
 
-        # Busca termos: numero de 6-8 digitos + CTe na mesma linha
+        # Busca termos: numero de 7 digitos
         match_termo = re.search(r'\b(\d{7})\b', linha)
-        match_cte = re.search(r'CT-?e\s*(\d+)', linha, re.IGNORECASE)
-        match_nfe = re.search(r'NF-?e\s*(\d+)', linha, re.IGNORECASE)
+        
+        # Padroes de CTe (mais flexiveis)
+        match_cte = (
+            re.search(r'CT-?[eE]\s*[:\s]*(\d+)', linha) or
+            re.search(r'CTE\s*[:\s]*(\d+)', linha, re.IGNORECASE) or
+            re.search(r'Conhecimento\s*[:\s]*(\d+)', linha, re.IGNORECASE)
+        )
+        
+        # Padroes de NF-e
+        match_nfe = (
+            re.search(r'NF-?[eE]\s*[:\s]*(\d+)', linha) or
+            re.search(r'NFE\s*[:\s]*(\d+)', linha, re.IGNORECASE) or
+            re.search(r'Nota\s*Fiscal\s*[:\s]*(\d+)', linha, re.IGNORECASE)
+        )
+        
         match_data = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
         match_situacao = re.search(r'(Pendente|Regularizado|Liberado)', linha, re.IGNORECASE)
 
         if match_termo and (match_cte or match_nfe):
-            # Verifica se o numero do termo nao e na verdade um CTe/NF-e
             num_termo = match_termo.group(1)
             num_cte = match_cte.group(1) if match_cte else ""
             num_nfe = match_nfe.group(1) if match_nfe else ""
@@ -123,11 +140,66 @@ def extrair_termos(texto: str) -> List[TermoApreensao]:
                 cte=num_cte,
             )
             termos.append(termo)
-            logger.debug(f"Termo encontrado: {termo.numero} - CTe: {termo.cte}")
+            logger.debug(f"Termo encontrado: {termo.numero} - CTe: {termo.cte} - NF-e: {termo.nfe}")
+
+        elif match_termo and not match_cte and not match_nfe:
+            # Termo encontrado SEM CTe/NF-e na mesma linha
+            # Tenta buscar nas linhas adjacentes
+            num_termo = match_termo.group(1)
+            num_cte = ""
+            num_nfe = ""
+
+            for offset in [1, 2, -1]:
+                idx = i + offset
+                if 0 <= idx < len(linhas):
+                    linha_adj = linhas[idx]
+                    if not num_cte:
+                        m = (re.search(r'CT-?[eE]\s*[:\s]*(\d+)', linha_adj) or
+                             re.search(r'CTE\s*[:\s]*(\d+)', linha_adj, re.IGNORECASE))
+                        if m:
+                            num_cte = m.group(1)
+                    if not num_nfe:
+                        m = (re.search(r'NF-?[eE]\s*[:\s]*(\d+)', linha_adj) or
+                             re.search(r'NFE\s*[:\s]*(\d+)', linha_adj, re.IGNORECASE))
+                        if m:
+                            num_nfe = m.group(1)
+
+            # Se encontrou CTe/NF-e nas adjacentes E temos data ou situacao
+            if (num_cte or num_nfe) and (match_data or match_situacao):
+                termo = TermoApreensao(
+                    numero=num_termo,
+                    situacao=parsear_situacao(match_situacao.group(1)) if match_situacao else SituacaoTermo.DESCONHECIDO,
+                    data_emissao=match_data.group(1) if match_data else "",
+                    tipo_fiel=tipo_atual,
+                    nfe=num_nfe,
+                    cte=num_cte,
+                )
+                termos.append(termo)
+                logger.debug(f"Termo encontrado (adjacente): {termo.numero} - CTe: {termo.cte}")
 
     # Tenta regex mais complexo se nao encontrou nada
     if not termos:
         termos = _extrair_termos_regex_complexo(texto)
+
+    # FALLBACK: se encontrou termos mas NENHUM tem CTe,
+    # tenta extrair CTes globalmente e associar
+    if termos and all(not t.cte for t in termos):
+        logger.warning("Termos encontrados mas NENHUM com CTe. Tentando extracao global...")
+        todos_ctes = re.findall(r'CT-?[eE]\s*[:\s]*(\d+)', texto)
+        if not todos_ctes:
+            todos_ctes = re.findall(r'CTE\s*[:\s]*(\d+)', texto, re.IGNORECASE)
+        if not todos_ctes:
+            # Busca numeros de 6-7 digitos que nao sejam numeros de termos
+            numeros_termos = set(t.numero for t in termos)
+            candidatos = re.findall(r'\b(\d{6,7})\b', texto)
+            todos_ctes = [c for c in candidatos if c not in numeros_termos]
+
+        if todos_ctes:
+            ctes_unicos = list(dict.fromkeys(todos_ctes))
+            for idx, termo in enumerate(termos):
+                if idx < len(ctes_unicos):
+                    termo.cte = ctes_unicos[idx]
+                    logger.info(f"Associou CTe {ctes_unicos[idx]} ao termo {termo.numero} (fallback global)")
 
     return termos
 

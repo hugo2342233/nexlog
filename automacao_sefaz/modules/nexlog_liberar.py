@@ -98,11 +98,15 @@ class NexlogLiberar:
         }
 
         # Campo de pesquisa da tabela
+        # Baseado no script original (Liberar_retencao.py), o campo e:
+        # //*[@id='RetentionList_filter']/label/input
         xpath_pesquisar = (
-            "//input[contains(@class,'search') or contains(@type,'search')]"
-            " | //div[contains(@class,'filter')]//input"
+            "//*[@id='RetentionList_filter']//input"
+            " | //input[contains(@class,'search') or contains(@type,'search')]"
+            " | //div[contains(@id,'_filter')]//input"
             " | //label[contains(.,'Pesquisar')]//input"
             " | //input[contains(@placeholder,'Pesquisar') or contains(@aria-label,'Pesquisar')]"
+            " | //div[contains(@class,'filter')]//input"
         )
 
         for awb in awbs:
