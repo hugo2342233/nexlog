@@ -482,6 +482,14 @@ class AppAutomacao:
 
                 if awb:
                     mapa_cte_awb[cte] = awb  # Salva mapeamento para etapa 6
+
+                    # Verifica se o AWB e servico MELI/Meli Belly
+                    # AWBs MELI nao precisam de comentario de retido
+                    servico_awb = cte_mod.verificar_servico_awb(awb)
+                    if servico_awb and "MELI" in servico_awb.upper():
+                        self._log(f"    AWB {awb} (CTe {cte}): servico MELI - pula comentario")
+                        continue
+
                     sucesso = cte_mod.adicionar_comentario_critico(awb, comentario)
                     if sucesso:
                         resultado.comentarios_adicionados += 1

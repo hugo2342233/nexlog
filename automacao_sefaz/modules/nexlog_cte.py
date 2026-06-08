@@ -34,8 +34,9 @@ class NexlogCTeOperacoes:
         Fluxo: Vendas > Conhecimento > Lista > Aba 'Por referencia'
                > Campo 'Numero integracao' > Pesquisar > Le 'N. documento'
 
-        IMPORTANTE: NAO recarrega a pagina entre buscas.
-        Apenas clica no botao toogleFilter se o campo estiver oculto.
+        IMPORTANTE: NAO recarrega a pagina entre buscas do mesmo voo.
+        SEMPRE clica no toogleFilter para garantir campo visivel
+        (mesmo vindo de outro voo onde a URL ja era TransportOrder).
 
         Returns:
             Numero do AWB (127...) ou "" se nao encontrar
@@ -51,36 +52,23 @@ class NexlogCTeOperacoes:
                 # Nao estamos na pagina — navega
                 self.browser.navegar_vendas_conhecimento_lista()
                 time.sleep(3)
-                # Clica na aba "Por referencia"
-                aba_referencia = self.wait.until(
-                    EC.element_to_be_clickable((By.XPATH,
-                        "//a[contains(.,'Por refer') or contains(.,'por refer')]"
-                        " | //a[text()='Por referência']"
-                    ))
-                )
-                aba_referencia.click()
-                time.sleep(3)
 
-            # Verifica se campo esta visivel, se nao clica no filtro
+            # SEMPRE clica na aba "Por referencia" (pode estar em outra aba)
+            try:
+                aba = self.driver.find_element(By.XPATH,
+                    "//a[contains(.,'Por refer')]"
+                )
+                aba.click()
+                time.sleep(2)
+            except Exception:
+                pass
+
+            # SEMPRE tenta abrir filtro se campo nao esta visivel
+            # (apos pesquisa anterior ou ao vir de outro voo, os campos somem)
             if not self._campo_integracao_visivel():
                 logger.debug("Campo nao visivel, clicando em toogleFilter...")
                 self._tentar_abrir_filtro()
                 time.sleep(2)
-
-            # Se AINDA nao esta visivel, tenta clicar na aba "Por referencia" primeiro
-            if not self._campo_integracao_visivel():
-                logger.debug("Tentando clicar na aba Por referencia...")
-                try:
-                    aba = self.driver.find_element(By.XPATH,
-                        "//a[contains(.,'Por refer')]"
-                    )
-                    aba.click()
-                    time.sleep(2)
-                    # Tenta filtro de novo
-                    self._tentar_abrir_filtro()
-                    time.sleep(2)
-                except Exception:
-                    pass
 
             # Preenche campo "Numero integracao"
             campo_integracao = self.wait.until(
@@ -226,6 +214,37 @@ class NexlogCTeOperacoes:
 
             return ""
 
+        except Exception:
+            return ""
+
+    def verificar_servico_awb(self, awb: str) -> str:
+        """
+        Verifica o servico do AWB na tabela de resultados.
+        Apos buscar_awb_do_cte, a tabela mostra a linha do AWB com colunas
+        incluindo "Servico" (ex: E-GOLLOG, MELI, etc.).
+        
+        Olha a coluna "Servico" da primeira linha visivel na tabela.
+        
+        Returns:
+            String com o servico (ex: "E-GOLLOG", "MELI") ou "" se nao encontrar
+        """
+        try:
+            # Tenta ler o texto da primeira linha da tabela
+            linha = self.driver.find_element(By.XPATH, "//table//tbody//tr[1]")
+            texto_linha = linha.text.upper()
+            
+            # Verifica se contem MELI
+            if "MELI" in texto_linha:
+                return "MELI"
+            
+            # Tenta buscar especificamente na coluna Servico
+            celulas = linha.find_elements(By.TAG_NAME, "td")
+            for celula in celulas:
+                texto = celula.text.strip().upper()
+                if "MELI" in texto or "BELLY" in texto:
+                    return texto
+            
+            return ""
         except Exception:
             return ""
 
