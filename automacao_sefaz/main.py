@@ -416,70 +416,84 @@ class AppAutomacao:
         else:
             self._log("  AVISO: Nao conseguiu baixar manifesto")
 
-        # --- ETAPA 3: Verificar Outlook ---
+        # --- ETAPA 3: Verificar Outlook (tenta primeiro) ---
         self._log("  [3/6] Verificando Outlook...")
+        consulta = None
+        resposta = RespostaEmail.INDEFINIDO
+        usou_outlook = False
+
         try:
             outlook.abrir_outlook()
             resposta = outlook.buscar_por_chave(chave)
             self._log(f"  Resposta email: {resposta.value}")
-        except Exception as e:
-            self._log(f"  Outlook erro: {e} - tratando como indefinido")
-            resposta = RespostaEmail.INDEFINIDO
 
-        # --- ETAPA 4: Consultar SEFAZ (se necessario) ---
-        consulta = None
-        if resposta == RespostaEmail.SEM_TERMOS:
-            self._log("  [4/6] Email diz SEM termos - pulando SEFAZ")
-        elif resposta == RespostaEmail.NAO_RESPONDEU:
-            self._log("  [4/6] SEFAZ nao respondeu - pulando voo")
-            resultado.erros.append("SEFAZ nao respondeu ao email")
-            outlook.voltar_para_nexlog()
-            return resultado
-        else:
-            self._log("  [4/6] Consultando SEFAZ...")
-            try:
-                # Tenta baixar PDF do email primeiro
+            if resposta == RespostaEmail.SEM_TERMOS:
+                # Email confirma sem termos — confiavel
+                self._log("  Email diz SEM termos - voo liberado")
+                usou_outlook = True
+            elif resposta == RespostaEmail.COM_TERMOS:
+                # Tenta baixar PDF do email
                 caminho_pdf = outlook.baixar_anexo_pdf()
                 if caminho_pdf:
                     consulta = parsear_relatorio_pdf(caminho_pdf)
-                    # VALIDACAO: verifica se o PDF e do voo correto
-                    # (evita usar PDF do voo anterior que ficou aberto)
+                    # Valida que o PDF e do voo correto
                     if consulta.chave and chave and consulta.chave != chave:
-                        self._log(f"  AVISO: PDF e de outro voo (chave diferente) - descartando")
-                        self._log(f"    Esperado: {chave[:20]}...")
-                        self._log(f"    Encontrado: {consulta.chave[:20]}...")
+                        self._log(f"  AVISO: PDF e de outro voo - descartando")
                         consulta = None
-                        caminho_pdf = ""
-                    elif consulta.total_termos >= 0:
+                    elif consulta.total_termos > 0:
                         self._log(f"  Relatorio do email: {consulta.total_termos} termos")
-                    
-                if not caminho_pdf or consulta is None:
-                    # Tenta via site
-                    sefaz.abrir_sefaz()
-                    if not sefaz.logado:
-                        sefaz.login()
-                    sefaz.navegar_consulta_analise_mdfe()
-                    consulta = sefaz.consultar_chave_mdfe(chave)
-                    if consulta:
-                        # SEGURANCA: Se status DESCONHECIDO com 0 termos, o relatorio
-                        # nao foi extraido corretamente. NAO podemos liberar sem saber
-                        # se existem termos ou nao.
-                        if consulta.status.value == "desconhecido" and consulta.total_termos == 0:
-                            self._log("  Site SEFAZ: INCONCLUSIVO (relatorio nao extraido)")
-                            self._log("  SEGURANCA: NAO libera este voo - consultar manualmente")
-                            resultado.erros.append("SEFAZ inconclusivo - consultar manualmente")
-                            sefaz.voltar_para_nexlog()
-                            outlook.voltar_para_nexlog()
-                            return resultado
-                        else:
-                            self._log(f"  Site SEFAZ: {consulta.total_termos} termos")
+                        usou_outlook = True
                     else:
-                        self._log("  Site SEFAZ: sem resultado")
-                    sefaz.voltar_para_nexlog()
-            except Exception as e:
-                self._log(f"  Erro SEFAZ: {e}")
+                        # PDF sem termos mas email dizia COM — inconsistente
+                        self._log("  AVISO: PDF sem termos (inconsistente) - consultando site")
+                        consulta = None
+                else:
+                    self._log("  Email sem anexo PDF - consultando site SEFAZ")
+            # Se NAO_RESPONDEU ou INDEFINIDO -> vai pro site
+        except Exception as e:
+            self._log(f"  Outlook erro: {e}")
 
         outlook.voltar_para_nexlog()
+
+        # --- ETAPA 4: Consultar site SEFAZ (se Outlook nao resolveu) ---
+        if not usou_outlook and consulta is None and resposta != RespostaEmail.SEM_TERMOS:
+            self._log("  [4/6] Consultando site SEFAZ...")
+            try:
+                sefaz.abrir_sefaz()
+                if not sefaz.logado:
+                    sefaz.login()
+                sefaz.navegar_consulta_analise_mdfe()
+                consulta = sefaz.consultar_chave_mdfe(chave)
+
+                if consulta:
+                    # SEGURANCA: Se status DESCONHECIDO com 0 termos, o relatorio
+                    # nao foi extraido corretamente.
+                    if consulta.status.value == "desconhecido" and consulta.total_termos == 0:
+                        self._log("  Site SEFAZ: INCONCLUSIVO (relatorio nao extraido)")
+                        self._log("  SEGURANCA: NAO libera este voo - consultar manualmente")
+                        resultado.erros.append("SEFAZ inconclusivo - consultar manualmente")
+                        sefaz.voltar_para_nexlog()
+                        return resultado
+                    else:
+                        self._log(f"  Site SEFAZ: {consulta.total_termos} termos")
+                else:
+                    self._log("  Site SEFAZ: sem resultado")
+                    # Nao respondeu no email E nao tem no site — pula voo
+                    if resposta == RespostaEmail.NAO_RESPONDEU:
+                        self._log("  SEFAZ nao respondeu e site sem resultado - pulando voo")
+                        resultado.erros.append("SEFAZ sem resposta")
+                        sefaz.voltar_para_nexlog()
+                        return resultado
+
+                sefaz.voltar_para_nexlog()
+            except Exception as e:
+                self._log(f"  Erro SEFAZ: {e}")
+                try:
+                    sefaz.voltar_para_nexlog()
+                except Exception:
+                    pass
+        else:
+            self._log("  [4/6] Outlook resolveu - pulando site SEFAZ")
 
         # --- ETAPA 5: Adicionar comentarios nos CTes retidos ---
         mapa_cte_awb = {}  # Mapeamento CTe -> AWB (usado na etapa 6 para filtrar)
