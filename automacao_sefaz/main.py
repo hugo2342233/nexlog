@@ -461,7 +461,18 @@ class AppAutomacao:
                     sefaz.navegar_consulta_analise_mdfe()
                     consulta = sefaz.consultar_chave_mdfe(chave)
                     if consulta:
-                        self._log(f"  Site SEFAZ: {consulta.total_termos} termos")
+                        # SEGURANCA: Se status DESCONHECIDO com 0 termos, o relatorio
+                        # nao foi extraido corretamente. NAO podemos liberar sem saber
+                        # se existem termos ou nao.
+                        if consulta.status.value == "desconhecido" and consulta.total_termos == 0:
+                            self._log("  Site SEFAZ: INCONCLUSIVO (relatorio nao extraido)")
+                            self._log("  SEGURANCA: NAO libera este voo - consultar manualmente")
+                            resultado.erros.append("SEFAZ inconclusivo - consultar manualmente")
+                            sefaz.voltar_para_nexlog()
+                            outlook.voltar_para_nexlog()
+                            return resultado
+                        else:
+                            self._log(f"  Site SEFAZ: {consulta.total_termos} termos")
                     else:
                         self._log("  Site SEFAZ: sem resultado")
                     sefaz.voltar_para_nexlog()
