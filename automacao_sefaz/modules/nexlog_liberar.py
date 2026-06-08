@@ -36,49 +36,54 @@ class NexlogLiberar:
         1. Ajusta data inicial para dia 01
         2. Seleciona status "Retida" no select2
         3. Clica Pesquisar
+        
+        IMPORTANTE: No 2o voo em diante, os filtros ja podem estar configurados.
+        Nesse caso, apenas clica Pesquisar (nao precisa reconfigurar).
         """
         try:
-            # Ajusta data inicial — usa o campo StartDate
-            # O script original apenas digita "01" (dia 1 do mes)
-            campo_data_ini = self.wait.until(
-                EC.element_to_be_clickable((By.XPATH,
-                    "//*[@id='StartDate']"
-                    " | //input[contains(@id,'StartDate') or contains(@id,'startDate') "
-                    "or contains(@name,'StartDate')]"
-                    " | //label[contains(.,'Data inicial')]//following::input[1]"
-                ))
-            )
-            campo_data_ini.click()
-            campo_data_ini.send_keys(Keys.CONTROL, "a")
-            campo_data_ini.send_keys("01")
-            campo_data_ini.send_keys(Keys.ENTER)
-            time.sleep(1)
-
-            # Seleciona status "Retida" no Select2 (exatamente como script original)
+            # Tenta ajustar data inicial — usa o campo StartDate
             try:
-                # Abre o Select2
-                select2_container = self.wait.until(
+                campo_data_ini = self.wait.until(
                     EC.element_to_be_clickable((By.XPATH,
-                        "//span[@id='select2-Status-container']"
-                        " | //span[contains(@id,'select2') and contains(@id,'Status')]"
+                        "//*[@id='StartDate']"
+                        " | //input[contains(@id,'StartDate') or contains(@id,'startDate') "
+                        "or contains(@name,'StartDate')]"
+                        " | //label[contains(.,'Data inicial')]//following::input[1]"
                     ))
                 )
-                select2_container.click()
-                time.sleep(1)
-
-                # Seleciona opcao "Retida"
-                opcao_retida = self.wait.until(
-                    EC.element_to_be_clickable((By.XPATH,
-                        "//li[contains(@class,'select2-results__option') "
-                        "and normalize-space()='Retida']"
-                    ))
-                )
-                opcao_retida.click()
+                campo_data_ini.click()
+                campo_data_ini.send_keys(Keys.CONTROL, "a")
+                campo_data_ini.send_keys("01")
+                campo_data_ini.send_keys(Keys.ENTER)
                 time.sleep(1)
             except Exception as e:
-                logger.warning(f"Nao conseguiu selecionar status 'Retida': {e}")
+                logger.debug(f"Campo data nao encontrado (pode ja estar configurado): {e}")
 
-            # Clica Pesquisar (botao com id searchButton ou texto)
+            # Tenta selecionar status "Retida" no Select2
+            try:
+                select2_container = self.driver.find_element(By.XPATH,
+                    "//span[@id='select2-Status-container']"
+                    " | //span[contains(@id,'select2') and contains(@id,'Status')]"
+                )
+                # Verifica se ja esta com "Retida" selecionado
+                texto_atual = select2_container.text.strip().lower()
+                if "retida" not in texto_atual:
+                    select2_container.click()
+                    time.sleep(1)
+                    opcao_retida = self.wait.until(
+                        EC.element_to_be_clickable((By.XPATH,
+                            "//li[contains(@class,'select2-results__option') "
+                            "and normalize-space()='Retida']"
+                        ))
+                    )
+                    opcao_retida.click()
+                    time.sleep(1)
+                else:
+                    logger.debug("Status ja esta como 'Retida'")
+            except Exception as e:
+                logger.debug(f"Select2 Status nao configurado: {e}")
+
+            # Clica Pesquisar (SEMPRE — mesmo se filtros ja estavam ok)
             botao_pesquisar = self.wait.until(
                 EC.element_to_be_clickable((By.XPATH,
                     "//*[@id='searchButton']"

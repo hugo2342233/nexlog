@@ -221,9 +221,26 @@ class NexlogBrowser:
         logger.info("Nexlog: Na pagina de Conhecimento/Lista")
 
     def navegar_vendas_retencao_lista(self):
-        """Navega para: Vendas > Retencao > Lista."""
-        self.navegar_url("https://golcargo.nexlog.com/Sales/Retention/")
-        time.sleep(2)
+        """
+        Navega para: Vendas > Retencao > Lista.
+        SEMPRE forca reload para garantir pagina limpa (sem checkboxes marcados).
+        """
+        self.voltar_aba_principal()
+        self._fechar_modais()
+        url = "https://golcargo.nexlog.com/Sales/Retention/"
+        url_atual = ""
+        try:
+            url_atual = self.driver.current_url
+        except Exception:
+            pass
+
+        if "Retention" in url_atual:
+            # Ja esta na pagina — refresh para limpar checkboxes anteriores
+            self.driver.refresh()
+        else:
+            self.driver.get(url)
+
+        time.sleep(4)
         logger.info("Nexlog: Na pagina de Retencoes")
 
     def aguardar_download(self, timeout: int = 60) -> str:
