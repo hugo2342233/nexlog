@@ -183,28 +183,82 @@ class NexlogCTeOperacoes:
         return False
 
     def _ler_awb_resultado(self) -> str:
-        """Le o AWB (N. documento) da primeira linha da tabela de resultados."""
+        """
+        Le o AWB (N. documento) da tabela de resultados.
+        
+        IMPORTANTE: CTes sao reutilizados no Nexlog. Se a busca retornar
+        multiplos resultados, pega o AWB da linha com DATA MAIS RECENTE.
+        """
         try:
             # Verifica se tem resultados
             try:
-                self.driver.find_element(By.XPATH,
+                msg = self.driver.find_element(By.XPATH,
                     "//*[contains(.,'Nenhum registro')]"
                 )
-                return ""
+                if msg.is_displayed():
+                    return ""
             except Exception:
                 pass
 
-            # Busca na tabela de resultados a coluna N. documento
-            # O AWB comeca com 127
-            celulas = self.driver.find_elements(By.XPATH,
-                "//table//tbody//tr[1]//td"
+            # Busca todas as linhas da tabela
+            linhas = self.driver.find_elements(By.XPATH,
+                "//table//tbody//tr"
             )
-            for celula in celulas:
-                texto = celula.text.strip()
-                if texto.startswith("127") and len(texto) >= 10 and texto.isdigit():
-                    return texto
 
-            # Alternativa: busca por regex na pagina
+            if not linhas:
+                return ""
+
+            # Se so tem 1 linha, pega direto
+            if len(linhas) == 1:
+                celulas = linhas[0].find_elements(By.TAG_NAME, "td")
+                for celula in celulas:
+                    texto = celula.text.strip()
+                    if texto.startswith("127") and len(texto) >= 10 and texto.isdigit():
+                        return texto
+                return ""
+
+            # Multiplas linhas — pega a mais recente pela data
+            # Formato da data no Nexlog: "DD/MM/YYYY HH:MM:SS"
+            melhor_awb = ""
+            melhor_data = ""
+
+            for linha in linhas:
+                try:
+                    celulas = linha.find_elements(By.TAG_NAME, "td")
+                    awb_linha = ""
+                    data_linha = ""
+
+                    for celula in celulas:
+                        texto = celula.text.strip()
+                        # Identifica AWB (comeca com 127, 10+ digitos)
+                        if texto.startswith("127") and len(texto) >= 10 and texto.isdigit():
+                            awb_linha = texto
+                        # Identifica data (formato DD/MM/YYYY HH:MM:SS ou DD/MM/YYYY HH:MM)
+                        elif re.match(r'\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}', texto):
+                            data_linha = texto
+
+                    if awb_linha:
+                        if not melhor_awb:
+                            melhor_awb = awb_linha
+                            melhor_data = data_linha
+                        elif data_linha and melhor_data:
+                            if self._data_mais_recente(data_linha, melhor_data):
+                                melhor_awb = awb_linha
+                                melhor_data = data_linha
+                        elif data_linha and not melhor_data:
+                            melhor_awb = awb_linha
+                            melhor_data = data_linha
+
+                except Exception:
+                    continue
+
+            if melhor_awb:
+                if len(linhas) > 1:
+                    logger.debug(f"Multiplos resultados ({len(linhas)} linhas) - "
+                               f"pegou AWB mais recente: {melhor_awb} ({melhor_data})")
+                return melhor_awb
+
+            # Fallback: regex no texto da tabela
             page_text = self.driver.find_element(
                 By.XPATH, "//table//tbody"
             ).text
@@ -216,6 +270,25 @@ class NexlogCTeOperacoes:
 
         except Exception:
             return ""
+
+    def _data_mais_recente(self, data1: str, data2: str) -> bool:
+        """
+        Compara duas datas no formato DD/MM/YYYY HH:MM:SS.
+        Retorna True se data1 e mais recente que data2.
+        """
+        try:
+            from datetime import datetime
+            try:
+                d1 = datetime.strptime(data1[:19], "%d/%m/%Y %H:%M:%S")
+            except ValueError:
+                d1 = datetime.strptime(data1[:16], "%d/%m/%Y %H:%M")
+            try:
+                d2 = datetime.strptime(data2[:19], "%d/%m/%Y %H:%M:%S")
+            except ValueError:
+                d2 = datetime.strptime(data2[:16], "%d/%m/%Y %H:%M")
+            return d1 > d2
+        except Exception:
+            return data1 > data2
 
     def verificar_servico_awb(self, awb: str) -> str:
         """
