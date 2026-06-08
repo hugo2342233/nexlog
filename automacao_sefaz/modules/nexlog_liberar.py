@@ -323,8 +323,20 @@ class NexlogLiberar:
         self.browser.navegar_vendas_retencao_lista()
         time.sleep(2)
 
-        # 2. Configura filtros
-        self.configurar_filtros(data_inicial, data_final)
+        # 2. Configura filtros (tolerante — se falhar, tenta continuar)
+        try:
+            self.configurar_filtros(data_inicial, data_final)
+        except Exception as e:
+            logger.warning(f"Filtros falharam mas tentando continuar: {e}")
+            # Tenta clicar Pesquisar diretamente (filtros podem ja estar ok)
+            try:
+                botao = self.driver.find_element(By.XPATH,
+                    "//*[@id='searchButton'] | //button[contains(.,'Pesquisar')]"
+                )
+                botao.click()
+                time.sleep(5)
+            except Exception:
+                pass
 
         # 3. Seleciona AWBs
         resultado = self.selecionar_awbs_para_liberacao(awbs)

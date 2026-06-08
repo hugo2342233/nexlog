@@ -223,7 +223,8 @@ class NexlogBrowser:
     def navegar_vendas_retencao_lista(self):
         """
         Navega para: Vendas > Retencao > Lista.
-        SEMPRE forca reload para garantir pagina limpa (sem checkboxes marcados).
+        Se ja esta na pagina, NAO faz refresh (filtros ja estao configurados
+        do voo anterior e o refresh causa timeout).
         """
         self.voltar_aba_principal()
         self._fechar_modais()
@@ -235,12 +236,12 @@ class NexlogBrowser:
             pass
 
         if "Retention" in url_atual:
-            # Ja esta na pagina — refresh para limpar checkboxes anteriores
-            self.driver.refresh()
+            # Ja esta na pagina — NAO recarrega
+            logger.debug("Ja esta em Retention - nao recarrega")
         else:
             self.driver.get(url)
+            time.sleep(4)
 
-        time.sleep(4)
         logger.info("Nexlog: Na pagina de Retencoes")
 
     def aguardar_download(self, timeout: int = 60) -> str:
