@@ -567,10 +567,25 @@ class SefazConsulta:
     def _imprimir_relatorio(self) -> str:
         """
         Clica no botao "Imprimir Relatorio" e extrai o texto.
-        O relatorio pode abrir em nova aba como PDF ou ser baixado.
+        
+        COMPORTAMENTO DO CHROME:
+        Com "plugins.always_open_pdf_externally": True, o Chrome BAIXA
+        o PDF em vez de exibir. A nova aba abre e fecha instantaneamente.
+        Entao precisamos aguardar o DOWNLOAD do arquivo e ler o PDF baixado.
         """
+        import os
+        import glob
+        import pdfplumber
+
+        pasta = config.pasta_downloads
+
         try:
-            # Botao "Imprimir Relatorio" (azul, ao lado de Pesquisar)
+            # Registra PDFs existentes ANTES de clicar
+            pdfs_antes = set()
+            if os.path.exists(pasta):
+                pdfs_antes = set(glob.glob(os.path.join(pasta, "*.pdf")))
+
+            # Clica "Imprimir Relatorio"
             botao_imprimir = self.wait.until(
                 EC.element_to_be_clickable((By.XPATH,
                     "//button[contains(.,'Imprimir Relat')]"
@@ -579,57 +594,81 @@ class SefazConsulta:
                 ))
             )
             botao_imprimir.click()
-            time.sleep(8)  # Pode demorar dependendo da qtd de termos
+            logger.debug("SEFAZ: Clicou em Imprimir Relatorio, aguardando download...")
 
-            # Verifica se abriu nova aba (PDF no navegador)
-            abas = self.driver.window_handles
-            if len(abas) > 2:  # Tem mais abas que as originais
-                # Muda para a nova aba
-                self.driver.switch_to.window(abas[-1])
-                time.sleep(3)
+            # Aguarda o PDF ser baixado (ate 30s)
+            tempo_inicio = time.time()
+            caminho_pdf = ""
 
-                # Extrai texto
-                texto = self.driver.find_element(By.TAG_NAME, "body").text
+            while time.time() - tempo_inicio < 30:
+                time.sleep(2)
 
-                # Fecha a aba do relatorio e volta
-                self.driver.close()
-                self.driver.switch_to.window(self._aba_sefaz)
+                if os.path.exists(pasta):
+                    pdfs_atuais = set(glob.glob(os.path.join(pasta, "*.pdf")))
+                    novos_pdfs = pdfs_atuais - pdfs_antes
+
+                    # Filtra apenas PDFs completos (nao .crdownload)
+                    for pdf_path in novos_pdfs:
+                        if not pdf_path.endswith('.crdownload') and os.path.getsize(pdf_path) > 100:
+                            caminho_pdf = pdf_path
+                            break
+
+                if caminho_pdf:
+                    break
+
+            if caminho_pdf:
+                # PDF baixado com sucesso — extrai texto
+                logger.info(f"SEFAZ: Relatorio baixado: {os.path.basename(caminho_pdf)}")
+                texto = ""
+                with pdfplumber.open(caminho_pdf) as pdf:
+                    for page in pdf.pages:
+                        texto += (page.extract_text() or "") + "\n"
 
                 if texto and len(texto) > 50:
                     return texto
 
-            # Se nao abriu nova aba, pode ter baixado o PDF
-            # Tenta encontrar o PDF baixado
-            pasta = config.pasta_downloads
-            import os
-            if os.path.exists(pasta):
-                import glob
-                pdfs = glob.glob(os.path.join(pasta, "*.pdf"))
-                if pdfs:
-                    mais_recente = max(pdfs, key=os.path.getmtime)
-                    # Verifica se foi baixado recentemente (ultimos 30s)
-                    import time as time_mod
-                    if time_mod.time() - os.path.getmtime(mais_recente) < 30:
-                        # Le o PDF
-                        resultado = parsear_relatorio_pdf(mais_recente)
-                        # Retorna o texto bruto para reprocessar
-                        with open(mais_recente, 'rb') as f:
-                            import pdfplumber
-                            with pdfplumber.open(f) as pdf:
-                                texto = ""
-                                for page in pdf.pages:
-                                    texto += (page.extract_text() or "") + "\n"
+            # Se nao baixou, tenta ler de uma nova aba (fallback)
+            try:
+                abas = self.driver.window_handles
+                if self._aba_sefaz in abas:
+                    for aba in abas:
+                        if aba != self._aba_sefaz and aba != self._aba_original:
+                            self.driver.switch_to.window(aba)
+                            time.sleep(3)
+                            texto = self.driver.find_element(By.TAG_NAME, "body").text
+                            self.driver.close()
+                            self.driver.switch_to.window(self._aba_sefaz)
+                            if texto and len(texto) > 50:
                                 return texto
+            except Exception:
+                pass
 
-            # Tenta extrair da pagina atual
-            texto = self.driver.find_element(By.TAG_NAME, "body").text
-            return texto
+            # Volta para aba segura
+            try:
+                abas = self.driver.window_handles
+                if self._aba_sefaz in abas:
+                    self.driver.switch_to.window(self._aba_sefaz)
+                elif self._aba_original in abas:
+                    self.driver.switch_to.window(self._aba_original)
+                elif abas:
+                    self.driver.switch_to.window(abas[0])
+            except Exception:
+                pass
+
+            logger.warning("SEFAZ: PDF nao baixado e nenhuma aba extra encontrada")
+            return ""
 
         except TimeoutException:
             logger.warning("SEFAZ: Botao Imprimir nao encontrado")
             return ""
         except Exception as e:
             logger.error(f"SEFAZ: Erro ao imprimir relatorio: {e}")
+            try:
+                abas = self.driver.window_handles
+                if abas:
+                    self.driver.switch_to.window(abas[0])
+            except Exception:
+                pass
             return ""
 
     def voltar_para_nexlog(self):
