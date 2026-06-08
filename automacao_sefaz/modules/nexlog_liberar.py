@@ -32,58 +32,56 @@ class NexlogLiberar:
     def configurar_filtros(self, data_inicial: str, data_final: str):
         """
         Configura os filtros da tela de Retencoes.
-        Baseado no script original (Liberar_retencao.py):
-        1. Ajusta data inicial para dia 01
-        2. Seleciona status "Retida" no select2
-        3. Clica Pesquisar
         
-        IMPORTANTE: No 2o voo em diante, os filtros ja podem estar configurados.
-        Nesse caso, apenas clica Pesquisar (nao precisa reconfigurar).
+        No 2o voo em diante, os filtros ja podem estar configurados
+        do voo anterior. Nesse caso apenas clica Pesquisar.
+        
+        Fluxo tolerante:
+        1. Tenta ajustar data (se falhar, pula)
+        2. Tenta selecionar status Retida (se ja esta, pula)
+        3. SEMPRE clica Pesquisar
         """
+        # Aguarda a pagina carregar (campos podem demorar apos refresh)
+        time.sleep(3)
+
+        # Tenta ajustar data inicial
         try:
-            # Tenta ajustar data inicial — usa o campo StartDate
-            try:
-                campo_data_ini = self.wait.until(
-                    EC.element_to_be_clickable((By.XPATH,
-                        "//*[@id='StartDate']"
-                        " | //input[contains(@id,'StartDate') or contains(@id,'startDate') "
-                        "or contains(@name,'StartDate')]"
-                        " | //label[contains(.,'Data inicial')]//following::input[1]"
-                    ))
-                )
+            campo_data_ini = self.driver.find_element(By.XPATH,
+                "//*[@id='StartDate']"
+                " | //input[contains(@id,'StartDate') or contains(@name,'StartDate')]"
+            )
+            if campo_data_ini.is_displayed():
                 campo_data_ini.click()
                 campo_data_ini.send_keys(Keys.CONTROL, "a")
                 campo_data_ini.send_keys("01")
                 campo_data_ini.send_keys(Keys.ENTER)
                 time.sleep(1)
-            except Exception as e:
-                logger.debug(f"Campo data nao encontrado (pode ja estar configurado): {e}")
+        except Exception as e:
+            logger.debug(f"Campo data nao encontrado: {e}")
 
-            # Tenta selecionar status "Retida" no Select2
-            try:
-                select2_container = self.driver.find_element(By.XPATH,
-                    "//span[@id='select2-Status-container']"
-                    " | //span[contains(@id,'select2') and contains(@id,'Status')]"
+        # Tenta selecionar status "Retida"
+        try:
+            select2_container = self.driver.find_element(By.XPATH,
+                "//span[@id='select2-Status-container']"
+                " | //span[contains(@id,'select2') and contains(@id,'Status')]"
+            )
+            texto_atual = (select2_container.text or "").strip().lower()
+            if "retida" not in texto_atual:
+                select2_container.click()
+                time.sleep(1)
+                opcao_retida = self.wait.until(
+                    EC.element_to_be_clickable((By.XPATH,
+                        "//li[contains(@class,'select2-results__option') "
+                        "and normalize-space()='Retida']"
+                    ))
                 )
-                # Verifica se ja esta com "Retida" selecionado
-                texto_atual = select2_container.text.strip().lower()
-                if "retida" not in texto_atual:
-                    select2_container.click()
-                    time.sleep(1)
-                    opcao_retida = self.wait.until(
-                        EC.element_to_be_clickable((By.XPATH,
-                            "//li[contains(@class,'select2-results__option') "
-                            "and normalize-space()='Retida']"
-                        ))
-                    )
-                    opcao_retida.click()
-                    time.sleep(1)
-                else:
-                    logger.debug("Status ja esta como 'Retida'")
-            except Exception as e:
-                logger.debug(f"Select2 Status nao configurado: {e}")
+                opcao_retida.click()
+                time.sleep(1)
+        except Exception as e:
+            logger.debug(f"Select2 Status: {e}")
 
-            # Clica Pesquisar (SEMPRE — mesmo se filtros ja estavam ok)
+        # SEMPRE clica Pesquisar
+        try:
             botao_pesquisar = self.wait.until(
                 EC.element_to_be_clickable((By.XPATH,
                     "//*[@id='searchButton']"
@@ -92,11 +90,9 @@ class NexlogLiberar:
             )
             botao_pesquisar.click()
             time.sleep(5)
-
             logger.info(f"Filtros configurados: data 01 + status Retida")
-
         except Exception as e:
-            logger.error(f"Erro ao configurar filtros de retencao: {e}")
+            logger.error(f"Erro ao clicar Pesquisar na tela de retencao: {e}")
             raise
 
     def selecionar_awbs_para_liberacao(self, awbs: Set[str]) -> Dict[str, str]:
