@@ -56,6 +56,7 @@ class TelegramBot:
         self._callback_parar: Optional[Callable] = None
         self._callback_status: Optional[Callable[[], str]] = None
         self._callback_voos: Optional[Callable[[], str]] = None
+        self._callback_buscar: Optional[Callable] = None
 
         # Fila de comandos recebidos (para processamento no main thread)
         self.fila_comandos: queue.Queue = queue.Queue()
@@ -82,12 +83,14 @@ class TelegramBot:
                             cb_iniciar: Optional[Callable] = None,
                             cb_parar: Optional[Callable] = None,
                             cb_status: Optional[Callable[[], str]] = None,
-                            cb_voos: Optional[Callable[[], str]] = None):
+                            cb_voos: Optional[Callable[[], str]] = None,
+                            cb_buscar: Optional[Callable] = None):
         """Registra callbacks do app principal para os comandos remotos."""
         self._callback_iniciar = cb_iniciar
         self._callback_parar = cb_parar
         self._callback_status = cb_status
         self._callback_voos = cb_voos
+        self._callback_buscar = cb_buscar
 
     # ========= ENVIO DE NOTIFICACOES =========
 
@@ -162,13 +165,11 @@ class TelegramBot:
     def iniciar(self):
         """Inicia o bot em thread separada (polling de comandos)."""
         if not self.configurado:
-            logger.warning("Telegram Bot: token ou chat_id nao configurados")
             return
 
         self._ativo = True
         self._thread = threading.Thread(target=self._loop_polling, daemon=True)
         self._thread.start()
-        logger.info(f"Telegram Bot iniciado (polling) - chat_id={self.chat_id}")
 
     def parar(self):
         """Para o bot."""
@@ -178,7 +179,6 @@ class TelegramBot:
                 self._app.stop()
             except Exception:
                 pass
-        logger.info("Telegram Bot parado")
 
     def _loop_polling(self):
         """Loop de polling simples usando requests (sem asyncio complexo)."""
@@ -186,8 +186,6 @@ class TelegramBot:
 
         url_base = f"https://api.telegram.org/bot{self.bot_token}"
         offset = 0
-
-        logger.info("Telegram polling iniciado")
 
         while self._ativo:
             try:
@@ -198,7 +196,6 @@ class TelegramBot:
                 )
 
                 if resp.status_code != 200:
-                    logger.warning(f"Telegram polling erro HTTP {resp.status_code}")
                     time.sleep(5)
                     continue
 
@@ -213,10 +210,7 @@ class TelegramBot:
 
             except Exception as e:
                 if self._ativo:
-                    logger.debug(f"Telegram polling erro: {e}")
                     time.sleep(5)
-
-        logger.info("Telegram polling encerrado")
 
     def _processar_update(self, update: dict):
         """Processa um update recebido do Telegram."""
@@ -233,7 +227,6 @@ class TelegramBot:
             return
 
         comando = text.split()[0].lower().replace("@", "").split("@")[0]
-        logger.info(f"Telegram comando recebido: {comando}")
 
         if comando == "/status":
             self._responder_status()
@@ -243,11 +236,13 @@ class TelegramBot:
             self._responder_parar()
         elif comando == "/voos":
             self._responder_voos()
+        elif comando == "/buscar":
+            self._responder_buscar()
         elif comando in ("/ajuda", "/help", "/start"):
             self._responder_ajuda()
         else:
             self._enviar_mensagem(
-                f"Comando desconhecido: `{comando}`\n"
+                f"Comando desconhecido: {comando}\n"
                 f"Use /ajuda para ver comandos disponiveis."
             )
 
@@ -260,16 +255,16 @@ class TelegramBot:
                 texto = self._callback_status()
                 self._enviar_mensagem(texto)
                 return
-            except Exception as e:
-                logger.error(f"Callback status erro: {e}")
+            except Exception:
+                pass
 
         # Fallback se nao tem callback
         if self._processando:
-            self._enviar_mensagem("\u23f3 *Processando...*\nUse /parar para cancelar.")
+            self._enviar_mensagem("Processando...\nUse /parar para cancelar.")
         elif self._ultimo_resumo:
-            self._enviar_mensagem(f"*Ultimo resultado:*\n{self._ultimo_resumo}")
+            self._enviar_mensagem(f"Ultimo resultado:\n{self._ultimo_resumo}")
         else:
-            self._enviar_mensagem("\U0001f4a4 *Idle* - Nenhum processamento recente.")
+            self._enviar_mensagem("Idle - Nenhum voo buscado.")
 
     def _responder_iniciar(self):
         """Responde ao /iniciar."""
@@ -317,18 +312,34 @@ class TelegramBot:
             except Exception as e:
                 logger.error(f"Callback voos erro: {e}")
 
-        self._enviar_mensagem("\u2139\ufe0f Nenhum voo na memoria. Busque na interface primeiro.")
+        self._enviar_mensagem("Nenhum voo na memoria. Use /buscar primeiro.")
+
+    def _responder_buscar(self):
+        """Responde ao /buscar — busca voos de hoje remotamente."""
+        if self._processando:
+            self._enviar_mensagem("Ja existe processamento em andamento! Aguarde.")
+            return
+
+        if self._callback_buscar:
+            self._enviar_mensagem("Buscando voos de hoje...")
+            try:
+                self._callback_buscar()
+            except Exception as e:
+                self._enviar_mensagem(f"Erro ao buscar: {e}")
+        else:
+            self._enviar_mensagem("Comando /buscar nao disponivel.")
 
     def _responder_ajuda(self):
         """Responde ao /ajuda."""
         msg = (
-            "\U0001f916 *AERO Bot - Comandos*\n\n"
+            "AERO Bot - Comandos\n\n"
             "/status - Estado atual do processamento\n"
+            "/buscar - Buscar voos de hoje\n"
             "/iniciar - Iniciar processamento (voos de hoje)\n"
             "/parar - Cancelar processamento\n"
             "/voos - Listar voos encontrados\n"
             "/ajuda - Esta mensagem\n\n"
-            "\U0001f4e1 Notificacoes automaticas de inicio/fim/erros"
+            "Notificacoes automaticas de inicio/fim/erros"
         )
         self._enviar_mensagem(msg)
 
@@ -346,13 +357,9 @@ class TelegramBot:
                 "chat_id": self.chat_id,
                 "text": texto,
             }
-            resp = requests.post(url, json=payload, timeout=10)
-            if resp.status_code != 200:
-                logger.warning(f"Telegram envio falhou: {resp.status_code} - {resp.text[:200]}")
-            else:
-                logger.debug(f"Telegram mensagem enviada OK")
-        except Exception as e:
-            logger.error(f"Telegram envio erro: {e}")
+            requests.post(url, json=payload, timeout=10)
+        except Exception:
+            pass
 
     def testar_conexao(self) -> bool:
         """
@@ -369,26 +376,16 @@ class TelegramBot:
             url = f"https://api.telegram.org/bot{self.bot_token}/getMe"
             resp = requests.get(url, timeout=10)
             if resp.status_code != 200 or not resp.json().get("ok"):
-                logger.error(f"Telegram token invalido: {resp.text[:100]}")
                 return False
 
-            bot_info = resp.json()["result"]
-            logger.info(f"Telegram Bot OK: @{bot_info.get('username', '?')}")
-
-            # 2. Envia mensagem de teste DIRETAMENTE (nao em thread)
+            # 2. Envia mensagem de teste
             url_send = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
             payload = {
                 "chat_id": self.chat_id,
                 "text": "AERO Bot conectado!\nNotificacoes configuradas com sucesso.",
             }
             resp2 = requests.post(url_send, json=payload, timeout=10)
-            if resp2.status_code == 200:
-                logger.info("Mensagem de teste enviada com sucesso")
-                return True
-            else:
-                logger.error(f"Telegram envio teste falhou: {resp2.status_code} - {resp2.text[:200]}")
-                return False
+            return resp2.status_code == 200
 
-        except Exception as e:
-            logger.error(f"Telegram teste falhou: {e}")
+        except Exception:
             return False

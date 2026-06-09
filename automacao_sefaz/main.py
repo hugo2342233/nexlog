@@ -613,10 +613,55 @@ class AppAutomacao:
             cb_parar=self._telegram_cmd_parar,
             cb_status=self._telegram_cmd_status,
             cb_voos=self._telegram_cmd_voos,
+            cb_buscar=self._telegram_cmd_buscar,
         )
 
         self._telegram_bot.iniciar()
         self._log("Telegram Bot iniciado!")
+
+    def _telegram_cmd_buscar(self):
+        """Callback do Telegram /buscar — busca voos de hoje."""
+        if self._processando:
+            return
+        # Agenda no main thread
+        self.janela.after(0, self._buscar_voos_telegram)
+
+    def _buscar_voos_telegram(self):
+        """Busca voos de hoje e notifica pelo Telegram."""
+        threading.Thread(target=self._buscar_voos_e_notificar, daemon=True).start()
+
+    def _buscar_voos_e_notificar(self):
+        """Busca voos e envia resultado via Telegram."""
+        hoje = datetime.now().strftime("%d/%m/%Y")
+        self._processando = True
+
+        try:
+            browser = NexlogBrowser()
+            browser.iniciar(headless=True)
+            browser.login_nexlog()
+
+            voos_mod = NexlogVoos(browser)
+            voos = voos_mod.pesquisar_voos(hoje, hoje)
+
+            self._voos_encontrados = voos
+            self._atualizar_lista_voos(voos)
+            browser.fechar()
+
+            # Notifica resultado pelo Telegram
+            if self._telegram_bot and voos:
+                linhas = [f"Encontrados {len(voos)} voo(s):\n"]
+                for v in voos[:15]:
+                    linhas.append(f"  - {v.numero_controle} ({v.etapas}) {v.hora_chegada}")
+                linhas.append(f"\nUse /iniciar para processar.")
+                self._telegram_bot._enviar_mensagem("\n".join(linhas))
+            elif self._telegram_bot:
+                self._telegram_bot._enviar_mensagem("Nenhum voo encontrado para hoje.")
+
+        except Exception as e:
+            if self._telegram_bot:
+                self._telegram_bot._enviar_mensagem(f"Erro ao buscar voos: {str(e)[:100]}")
+        finally:
+            self._processando = False
 
     def _telegram_cmd_iniciar(self):
         """Callback do Telegram /iniciar — dispara processamento."""
