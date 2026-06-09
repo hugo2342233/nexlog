@@ -184,29 +184,29 @@ class ConsultaCliente:
         return resultado
 
     def _aguardar_modal_rastreio(self, awb: str) -> bool:
-        """Aguarda o modal de rastreio abrir e verificar que contem o AWB."""
+        """Aguarda o modal de rastreio abrir (id=modalContainer, display:block)."""
         try:
-            # Espera ate 10s por algum elemento do modal de rastreio
+            # O modal do Nexlog tem id="modalContainer" e fica display:block quando aberto
             self.wait.until(
-                EC.presence_of_element_located((By.XPATH,
-                    "//div[contains(@class,'modal')]//h4[contains(.,'Rastreio')]"
-                    " | //div[contains(@class,'modal')]//*[contains(.,'CT-e')]"
-                    " | //div[contains(@class,'modal')]//*[contains(.,'Status operacional')]"
+                EC.visibility_of_element_located((By.XPATH,
+                    "//div[@id='modalContainer'][contains(@style,'display: block')]"
+                    " | //div[@id='modalContainer']//h4[contains(.,'Rastreio')]"
+                    " | //div[@id='modalContainer']//h4[contains(@class,'modal-title')]"
                 ))
             )
-            time.sleep(2)
+            time.sleep(3)
             return True
         except TimeoutException:
-            # Tenta verificar se tem algum modal aberto mesmo sem o titulo
+            # Fallback: qualquer modal com display:block que contenha o AWB
             try:
                 modais = self.driver.find_elements(By.XPATH,
                     "//div[contains(@class,'modal')][contains(@style,'display: block')]"
-                    " | //div[contains(@class,'modal') and contains(@class,'show')]"
-                    " | //div[contains(@class,'modal')]//div[contains(@class,'modal-content')]"
                 )
                 for modal in modais:
-                    if modal.is_displayed() and awb in modal.text:
-                        return True
+                    if modal.is_displayed():
+                        texto = modal.text
+                        if awb in texto or "Rastreio" in texto:
+                            return True
             except Exception:
                 pass
             return False
@@ -218,8 +218,8 @@ class ConsultaCliente:
             texto_modal = ""
             try:
                 modal = self.driver.find_element(By.XPATH,
-                    "//div[contains(@class,'modal')]//div[contains(@class,'modal-body')]"
-                    " | //div[contains(@class,'modal') and contains(@class,'show')]"
+                    "//div[@id='modalContainer']"
+                    " | //div[contains(@class,'modal')][contains(@style,'display: block')]"
                 )
                 texto_modal = modal.text
             except Exception:
@@ -269,7 +269,8 @@ class ConsultaCliente:
         try:
             # Busca todas as linhas da tabela dentro do modal
             linhas = self.driver.find_elements(By.XPATH,
-                "//div[contains(@class,'modal')]//table//tbody//tr"
+                "//div[@id='modalContainer']//table//tbody//tr"
+                " | //div[contains(@class,'modal')][contains(@style,'display: block')]//table//tbody//tr"
             )
 
             if not linhas:
@@ -333,8 +334,8 @@ class ConsultaCliente:
             texto_modal = ""
             try:
                 modal = self.driver.find_element(By.XPATH,
-                    "//div[contains(@class,'modal')]//div[contains(@class,'modal-body')]"
-                    " | //div[contains(@class,'modal') and contains(@class,'show')]"
+                    "//div[@id='modalContainer']"
+                    " | //div[contains(@class,'modal')][contains(@style,'display: block')]"
                 )
                 texto_modal = modal.text
             except Exception:
@@ -445,11 +446,12 @@ class ConsultaCliente:
     def _fechar_modal_rastreio(self):
         """Fecha o modal de rastreio (clica no X ou Fechar)."""
         try:
-            # Tenta o X do modal
+            # Tenta o X do modal (modalContainer)
             btn = self.driver.find_element(By.XPATH,
-                "//div[contains(@class,'modal')]//button[contains(@class,'close')]"
-                " | //div[contains(@class,'modal')]//button[@aria-label='Close']"
-                " | //div[contains(@class,'modal')]//button[contains(.,'Fechar')]"
+                "//div[@id='modalContainer']//button[contains(@class,'close')]"
+                " | //div[@id='modalContainer']//button[@aria-label='Close']"
+                " | //div[contains(@class,'modal')][contains(@style,'display: block')]"
+                "//button[contains(@class,'close')]"
             )
             btn.click()
             time.sleep(1)
