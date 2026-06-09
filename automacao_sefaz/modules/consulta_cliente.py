@@ -341,9 +341,14 @@ class ConsultaCliente:
                 return
 
             # Verifica se ja tem mencion a termo no texto visivel
-            if "RETIDO PELA SEFAZ" in texto_modal.upper():
+            # Formatos possiveis:
+            #   "RETIDO PELA SEFAZ TA 2410845"
+            #   "TA 7828273"
+            #   "RETIDO TA 8388"
+            #   "ta 2410845, TA 2410848"
+            termos = re.findall(r'(?:TA|ta)\s*(\d{4,})', texto_modal)
+            if termos:
                 resultado.tem_comentario_retido = True
-                termos = re.findall(r'TA\s*(\d{5,})', texto_modal, re.IGNORECASE)
                 resultado.termos = list(set(termos))
                 return
 
@@ -361,8 +366,14 @@ class ConsultaCliente:
 
                 if "RETIDO PELA SEFAZ" in texto_comentarios.upper():
                     resultado.tem_comentario_retido = True
-                    termos = re.findall(r'TA\s*(\d{5,})', texto_comentarios, re.IGNORECASE)
+                    termos = re.findall(r'(?:TA|ta)\s*(\d{4,})', texto_comentarios)
                     resultado.termos = list(set(termos))
+                else:
+                    # Tenta formato mais simples: so "TA" + numeros
+                    termos = re.findall(r'(?:TA|ta)\s*(\d{4,})', texto_comentarios)
+                    if termos:
+                        resultado.tem_comentario_retido = True
+                        resultado.termos = list(set(termos))
 
                 # Fecha popup de comentarios
                 try:
