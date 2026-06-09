@@ -1,5 +1,5 @@
 """
-Automacao SEFAZ - Retirada de Voos
+Aero - Automacao de Operacoes Aereas
 Orquestrador principal + Interface grafica.
 
 Fluxo completo:
@@ -70,7 +70,7 @@ class AppAutomacao:
 
     def __init__(self):
         self.janela = ctk.CTk()
-        self.janela.title("Retirada de Voos")
+        self.janela.title("Aero")
         self.janela.geometry("900x720")
         self.janela.resizable(True, True)
 
@@ -122,9 +122,9 @@ class AppAutomacao:
         header = ctk.CTkFrame(self.janela, fg_color="transparent", height=50)
         header.pack(fill="x", padx=24, pady=(18, 6))
 
-        ctk.CTkLabel(header, text="RETIRADA DE VOOS",
+        ctk.CTkLabel(header, text="AERO",
                      font=ctk.CTkFont(size=18, weight="bold")).pack(side="left")
-        ctk.CTkLabel(header, text="SEFAZ-AL",
+        ctk.CTkLabel(header, text="Operacoes Aereas",
                      font=ctk.CTkFont(size=11),
                      text_color="#6b7280").pack(side="left", padx=12)
 
