@@ -46,6 +46,8 @@ def parsear_status_mdfe(texto: str) -> StatusMDFe:
         return StatusMDFe.ANALISADO_SEM_PENDENCIAS
     elif "EM AN" in texto:
         return StatusMDFe.EM_ANALISE
+    elif "LIBERADO" in texto:
+        return StatusMDFe.SEM_ANALISE  # Liberado = sem termos/pendencias
     return StatusMDFe.DESCONHECIDO
 
 
