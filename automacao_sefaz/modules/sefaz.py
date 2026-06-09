@@ -47,10 +47,21 @@ class SefazConsulta:
         self._aba_original = None
 
     def abrir_sefaz(self):
-        """Abre o site da SEFAZ em uma nova aba."""
+        """
+        Abre o site da SEFAZ em uma aba.
+        Se ja tem uma aba SEFAZ aberta, REUTILIZA (nao abre nova).
+        Isso evita abrir multiplas abas e fazer login novamente.
+        """
         self._aba_original = self.driver.current_window_handle
 
-        # Abre nova aba
+        # Verifica se ja tem aba SEFAZ aberta e ainda valida
+        if self._aba_sefaz and self._aba_sefaz in self.driver.window_handles:
+            # Reutiliza a aba existente (ja logada)
+            self.driver.switch_to.window(self._aba_sefaz)
+            logger.debug("SEFAZ: Reutilizando aba ja aberta")
+            return
+
+        # Nao tem aba aberta — abre nova
         self.driver.execute_script("window.open('');")
         time.sleep(1)
         abas = self.driver.window_handles
