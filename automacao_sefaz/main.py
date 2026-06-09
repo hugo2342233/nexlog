@@ -56,11 +56,23 @@ logger = logging.getLogger("main")
 class AppAutomacao:
     """Interface principal da automacao."""
 
+    # Cores do tema dark minimalista
+    BG = "#0f0f0f"
+    BG_CARD = "#1a1a1a"
+    BG_INPUT = "#252525"
+    FG = "#e0e0e0"
+    FG_DIM = "#707070"
+    ACCENT = "#4fc3f7"
+    ACCENT_HOVER = "#81d4fa"
+    DANGER = "#ef5350"
+    SUCCESS = "#66bb6a"
+    BORDER = "#333333"
+
     def __init__(self):
         self.janela = tk.Tk()
-        self.janela.title("Automacao SEFAZ - Retirada de Voos")
-        self.janela.geometry("850x700")
-        self.janela.configure(bg="#1a1a2e")
+        self.janela.title("Retirada de Voos")
+        self.janela.geometry("900x720")
+        self.janela.configure(bg=self.BG)
         self.janela.resizable(True, True)
 
         # Variaveis
@@ -71,12 +83,11 @@ class AppAutomacao:
         self.sefaz_senha = tk.StringVar()
         self.data_inicial = tk.StringVar()
         self.data_final = tk.StringVar()
-        self.usar_a_partir_de = tk.BooleanVar(value=False)
-        self.voo_selecionado = tk.StringVar()
         self.timeout_var = tk.IntVar(value=20)
 
         # Estado
         self._voos_encontrados: List[Voo] = []
+        self._voos_checkboxes: List[tk.BooleanVar] = []
         self._processando = False
 
         # Datas padrao (ontem)
@@ -105,122 +116,178 @@ class AppAutomacao:
         config.sefaz.senha = self.sefaz_senha.get()
         config.timeout_padrao = self.timeout_var.get()
         config.salvar()
-        self._log("Credenciais salvas!")
 
     def _criar_interface(self):
-        """Cria a interface completa."""
-        # Titulo
-        titulo = tk.Label(
-            self.janela, text="RETIRADA DE VOOS - SEFAZ",
-            bg="#1a1a2e", fg="#00ffe1", font=("Segoe UI", 18, "bold"),
-        )
-        titulo.pack(pady=10)
+        """Interface minimalista dark."""
+        # Configura estilo ttk
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("TNotebook", background=self.BG, borderwidth=0)
+        style.configure("TNotebook.Tab", background=self.BG_CARD, foreground=self.FG,
+                       padding=[14, 6], font=("Segoe UI", 9))
+        style.map("TNotebook.Tab",
+                  background=[("selected", self.BG_INPUT)],
+                  foreground=[("selected", self.ACCENT)])
+
+        # Header
+        header = tk.Frame(self.janela, bg=self.BG, height=50)
+        header.pack(fill="x", padx=20, pady=(15, 5))
+        tk.Label(header, text="RETIRADA DE VOOS", bg=self.BG, fg=self.FG,
+                 font=("Segoe UI", 16, "bold")).pack(side="left")
+        tk.Label(header, text="SEFAZ-AL", bg=self.BG, fg=self.FG_DIM,
+                 font=("Segoe UI", 10)).pack(side="left", padx=10, pady=4)
+
+        # Separador
+        tk.Frame(self.janela, bg=self.BORDER, height=1).pack(fill="x", padx=20)
 
         # Notebook (abas)
         notebook = ttk.Notebook(self.janela)
-        notebook.pack(fill="both", expand=True, padx=10, pady=5)
-
-        # --- ABA CREDENCIAIS ---
-        aba_cred = tk.Frame(notebook, bg="#16213e")
-        notebook.add(aba_cred, text="  Credenciais  ")
-        self._criar_aba_credenciais(aba_cred)
+        notebook.pack(fill="both", expand=True, padx=20, pady=10)
 
         # --- ABA VOOS ---
-        aba_voos = tk.Frame(notebook, bg="#16213e")
+        aba_voos = tk.Frame(notebook, bg=self.BG)
         notebook.add(aba_voos, text="  Voos  ")
         self._criar_aba_voos(aba_voos)
 
+        # --- ABA CREDENCIAIS ---
+        aba_cred = tk.Frame(notebook, bg=self.BG)
+        notebook.add(aba_cred, text="  Config  ")
+        self._criar_aba_credenciais(aba_cred)
+
         # --- ABA LOG ---
-        aba_log = tk.Frame(notebook, bg="#16213e")
+        aba_log = tk.Frame(notebook, bg=self.BG)
         notebook.add(aba_log, text="  Log  ")
         self._criar_aba_log(aba_log)
 
+    def _criar_aba_voos(self, parent):
+        """Aba principal com busca de voos e checkboxes."""
+        # --- Barra de busca ---
+        frame_busca = tk.Frame(parent, bg=self.BG_CARD, highlightthickness=1,
+                               highlightbackground=self.BORDER)
+        frame_busca.pack(fill="x", padx=10, pady=(10, 5))
+
+        inner = tk.Frame(frame_busca, bg=self.BG_CARD)
+        inner.pack(fill="x", padx=15, pady=12)
+
+        tk.Label(inner, text="Periodo:", bg=self.BG_CARD, fg=self.FG_DIM,
+                 font=("Segoe UI", 9)).pack(side="left")
+        e1 = tk.Entry(inner, textvariable=self.data_inicial, width=11,
+                      bg=self.BG_INPUT, fg=self.FG, insertbackground=self.FG,
+                      relief="flat", font=("Segoe UI", 10))
+        e1.pack(side="left", padx=(8, 4))
+        tk.Label(inner, text="a", bg=self.BG_CARD, fg=self.FG_DIM,
+                 font=("Segoe UI", 9)).pack(side="left")
+        e2 = tk.Entry(inner, textvariable=self.data_final, width=11,
+                      bg=self.BG_INPUT, fg=self.FG, insertbackground=self.FG,
+                      relief="flat", font=("Segoe UI", 10))
+        e2.pack(side="left", padx=(4, 15))
+
+        btn_buscar = tk.Button(inner, text="BUSCAR", command=self._buscar_voos_thread,
+                               bg=self.ACCENT, fg="#000", font=("Segoe UI", 9, "bold"),
+                               relief="flat", cursor="hand2", padx=16, pady=2)
+        btn_buscar.pack(side="left")
+
+        # --- Lista de voos com checkboxes ---
+        frame_lista = tk.Frame(parent, bg=self.BG)
+        frame_lista.pack(fill="both", expand=True, padx=10, pady=5)
+
+        # Header da lista
+        frame_lista_header = tk.Frame(frame_lista, bg=self.BG)
+        frame_lista_header.pack(fill="x")
+
+        self.lbl_voos_count = tk.Label(frame_lista_header, text="Nenhum voo encontrado",
+                                        bg=self.BG, fg=self.FG_DIM, font=("Segoe UI", 9))
+        self.lbl_voos_count.pack(side="left")
+
+        btn_todos = tk.Button(frame_lista_header, text="Selecionar todos",
+                              command=self._selecionar_todos_voos,
+                              bg=self.BG, fg=self.ACCENT, relief="flat",
+                              font=("Segoe UI", 8), cursor="hand2")
+        btn_todos.pack(side="right")
+
+        btn_nenhum = tk.Button(frame_lista_header, text="Nenhum",
+                               command=self._desmarcar_todos_voos,
+                               bg=self.BG, fg=self.FG_DIM, relief="flat",
+                               font=("Segoe UI", 8), cursor="hand2")
+        btn_nenhum.pack(side="right", padx=(0, 8))
+
+        # Scrollable frame para os voos
+        self.canvas_voos = tk.Canvas(frame_lista, bg=self.BG, highlightthickness=0)
+        scrollbar = tk.Scrollbar(frame_lista, orient="vertical", command=self.canvas_voos.yview)
+        self.frame_voos_inner = tk.Frame(self.canvas_voos, bg=self.BG)
+
+        self.frame_voos_inner.bind("<Configure>",
+            lambda e: self.canvas_voos.configure(scrollregion=self.canvas_voos.bbox("all")))
+
+        self.canvas_voos.create_window((0, 0), window=self.frame_voos_inner, anchor="nw")
+        self.canvas_voos.configure(yscrollcommand=scrollbar.set)
+
+        self.canvas_voos.pack(side="left", fill="both", expand=True, pady=5)
+        scrollbar.pack(side="right", fill="y", pady=5)
+
+        # Bind scroll do mouse
+        self.canvas_voos.bind_all("<MouseWheel>",
+            lambda e: self.canvas_voos.yview_scroll(int(-1*(e.delta/120)), "units"))
+
+        # --- Botao Iniciar ---
+        frame_bottom = tk.Frame(parent, bg=self.BG)
+        frame_bottom.pack(fill="x", padx=10, pady=(5, 10))
+
+        self.btn_iniciar = tk.Button(frame_bottom, text="INICIAR PROCESSAMENTO",
+                                     command=self._iniciar_processamento_thread,
+                                     bg=self.SUCCESS, fg="#000",
+                                     font=("Segoe UI", 11, "bold"),
+                                     relief="flat", cursor="hand2", padx=20, pady=8)
+        self.btn_iniciar.pack(side="right")
+
     def _criar_aba_credenciais(self, parent):
-        frame = tk.Frame(parent, bg="#16213e")
-        frame.pack(fill="both", expand=True, padx=20, pady=20)
+        """Aba de configuracao / credenciais."""
+        frame = tk.Frame(parent, bg=self.BG)
+        frame.pack(fill="both", expand=True, padx=30, pady=20)
 
         # Nexlog
-        tk.Label(frame, text="NEXLOG", bg="#16213e", fg="#00ffe1",
-                 font=("Segoe UI", 12, "bold")).grid(row=0, column=0, columnspan=2, pady=10)
-        tk.Label(frame, text="Usuario:", bg="#16213e", fg="white").grid(row=1, column=0, sticky="e", padx=5)
-        tk.Entry(frame, textvariable=self.nexlog_user, width=30).grid(row=1, column=1, pady=3)
-        tk.Label(frame, text="Senha:", bg="#16213e", fg="white").grid(row=2, column=0, sticky="e", padx=5)
-        tk.Entry(frame, textvariable=self.nexlog_senha, show="*", width=30).grid(row=2, column=1, pady=3)
-        tk.Label(frame, text="Base:", bg="#16213e", fg="white").grid(row=3, column=0, sticky="e", padx=5)
-        tk.Entry(frame, textvariable=self.nexlog_base, width=30).grid(row=3, column=1, pady=3)
+        self._section_label(frame, "NEXLOG", 0)
+        self._field(frame, "CPF:", self.nexlog_user, 1)
+        self._field(frame, "Senha:", self.nexlog_senha, 2, show="*")
+        self._field(frame, "Base:", self.nexlog_base, 3)
 
         # SEFAZ
-        tk.Label(frame, text="SEFAZ-AL", bg="#16213e", fg="#00ffe1",
-                 font=("Segoe UI", 12, "bold")).grid(row=5, column=0, columnspan=2, pady=(20, 10))
-        tk.Label(frame, text="Usuario:", bg="#16213e", fg="white").grid(row=6, column=0, sticky="e", padx=5)
-        tk.Entry(frame, textvariable=self.sefaz_user, width=30).grid(row=6, column=1, pady=3)
-        tk.Label(frame, text="Senha:", bg="#16213e", fg="white").grid(row=7, column=0, sticky="e", padx=5)
-        tk.Entry(frame, textvariable=self.sefaz_senha, show="*", width=30).grid(row=7, column=1, pady=3)
+        self._section_label(frame, "SEFAZ-AL", 5)
+        self._field(frame, "Usuario:", self.sefaz_user, 6)
+        self._field(frame, "Senha:", self.sefaz_senha, 7, show="*")
 
-        # Timeout
-        tk.Label(frame, text="CONFIGURACAO", bg="#16213e", fg="#00ffe1",
-                 font=("Segoe UI", 12, "bold")).grid(row=9, column=0, columnspan=2, pady=(20, 10))
-        tk.Label(frame, text="Timeout (s):", bg="#16213e", fg="white").grid(row=10, column=0, sticky="e", padx=5)
-        tk.Entry(frame, textvariable=self.timeout_var, width=10).grid(row=10, column=1, sticky="w", pady=3)
-        tk.Label(frame, text="(aumente para PC/internet lenta)", bg="#16213e", fg="#888",
-                 font=("Segoe UI", 8)).grid(row=11, column=1, sticky="w")
+        # Config
+        self._section_label(frame, "GERAL", 9)
+        self._field(frame, "Timeout (s):", self.timeout_var, 10, width=8)
 
-        # Botao salvar
-        tk.Button(frame, text="SALVAR", command=self._salvar_credenciais,
-                  bg="#0f3460", fg="white", font=("Segoe UI", 10, "bold"),
-                  relief="flat", cursor="hand2").grid(row=13, column=0, columnspan=2, pady=20)
+        # Salvar
+        tk.Button(frame, text="SALVAR", command=self._salvar_e_confirmar,
+                  bg=self.ACCENT, fg="#000", font=("Segoe UI", 9, "bold"),
+                  relief="flat", cursor="hand2", padx=20, pady=4
+                  ).grid(row=12, column=0, columnspan=2, pady=25)
 
-    def _criar_aba_voos(self, parent):
-        frame = tk.Frame(parent, bg="#16213e")
-        frame.pack(fill="both", expand=True, padx=20, pady=10)
+    def _section_label(self, frame, text, row):
+        tk.Label(frame, text=text, bg=self.BG, fg=self.ACCENT,
+                 font=("Segoe UI", 10, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky="w", pady=(15, 5))
 
-        # Selecao de datas
-        frame_datas = tk.Frame(frame, bg="#16213e")
-        frame_datas.pack(fill="x", pady=10)
+    def _field(self, frame, label, var, row, show="", width=25):
+        tk.Label(frame, text=label, bg=self.BG, fg=self.FG_DIM,
+                 font=("Segoe UI", 9)).grid(row=row, column=0, sticky="e", padx=(0, 10), pady=3)
+        entry = tk.Entry(frame, textvariable=var, width=width, show=show,
+                         bg=self.BG_INPUT, fg=self.FG, insertbackground=self.FG,
+                         relief="flat", font=("Segoe UI", 10))
+        entry.grid(row=row, column=1, sticky="w", pady=3)
 
-        tk.Label(frame_datas, text="Data inicial:", bg="#16213e", fg="white").pack(side="left", padx=5)
-        tk.Entry(frame_datas, textvariable=self.data_inicial, width=12).pack(side="left", padx=5)
-        tk.Label(frame_datas, text="Data final:", bg="#16213e", fg="white").pack(side="left", padx=15)
-        tk.Entry(frame_datas, textvariable=self.data_final, width=12).pack(side="left", padx=5)
-
-        # Checkbox "A partir de um voo"
-        frame_apartir = tk.Frame(frame, bg="#16213e")
-        frame_apartir.pack(fill="x", pady=5)
-
-        tk.Checkbutton(frame_apartir, text="A partir de um voo especifico:",
-                       variable=self.usar_a_partir_de, bg="#16213e", fg="white",
-                       selectcolor="#0f3460", activebackground="#16213e",
-                       activeforeground="white").pack(side="left")
-
-        self.combo_voos = ttk.Combobox(frame_apartir, textvariable=self.voo_selecionado,
-                                        width=40, state="readonly")
-        self.combo_voos.pack(side="left", padx=10)
-
-        # Botoes
-        frame_btns = tk.Frame(frame, bg="#16213e")
-        frame_btns.pack(fill="x", pady=15)
-
-        tk.Button(frame_btns, text="BUSCAR VOOS", command=self._buscar_voos_thread,
-                  bg="#0f3460", fg="white", font=("Segoe UI", 10, "bold"),
-                  relief="flat", cursor="hand2").pack(side="left", padx=5)
-
-        tk.Button(frame_btns, text="INICIAR PROCESSAMENTO",
-                  command=self._iniciar_processamento_thread,
-                  bg="#e94560", fg="white", font=("Segoe UI", 11, "bold"),
-                  relief="flat", cursor="hand2").pack(side="left", padx=20)
-
-        # Lista de voos encontrados
-        tk.Label(frame, text="Voos encontrados:", bg="#16213e", fg="white",
-                 font=("Segoe UI", 10)).pack(anchor="w", pady=(10, 2))
-
-        self.lista_voos = tk.Listbox(frame, height=8, font=("Consolas", 9),
-                                      bg="#0d1117", fg="#c9d1d9", selectmode="single")
-        self.lista_voos.pack(fill="both", expand=True)
+    def _salvar_e_confirmar(self):
+        self._salvar_credenciais()
+        self._log("Credenciais salvas!")
 
     def _criar_aba_log(self, parent):
         self.log_widget = scrolledtext.ScrolledText(
-            parent, height=20, font=("Consolas", 9), bg="#0d1117", fg="#c9d1d9",
-            insertbackground="white"
+            parent, height=20, font=("Consolas", 9),
+            bg="#0a0a0a", fg="#b0b0b0", insertbackground="white",
+            relief="flat", borderwidth=0
         )
         self.log_widget.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -232,6 +299,69 @@ class AppAutomacao:
             self.log_widget.see(tk.END)
         self.janela.after(0, _update)
         logger.info(mensagem)
+
+    # ========= SELECAO DE VOOS =========
+
+    def _atualizar_lista_voos(self, voos: List[Voo]):
+        """Recria a lista de checkboxes com os voos encontrados."""
+        def _update():
+            # Limpa lista anterior
+            for widget in self.frame_voos_inner.winfo_children():
+                widget.destroy()
+            self._voos_checkboxes.clear()
+
+            if not voos:
+                self.lbl_voos_count.config(text="Nenhum voo encontrado")
+                return
+
+            self.lbl_voos_count.config(text=f"{len(voos)} voo(s) encontrado(s)")
+
+            for i, v in enumerate(voos):
+                var = tk.BooleanVar(value=True)  # Todos marcados por padrao
+                self._voos_checkboxes.append(var)
+
+                # Frame do voo
+                row = tk.Frame(self.frame_voos_inner, bg=self.BG_CARD,
+                               highlightthickness=1, highlightbackground=self.BORDER)
+                row.pack(fill="x", pady=2)
+
+                inner_row = tk.Frame(row, bg=self.BG_CARD)
+                inner_row.pack(fill="x", padx=10, pady=8)
+
+                # Checkbox
+                cb = tk.Checkbutton(inner_row, variable=var, bg=self.BG_CARD,
+                                    activebackground=self.BG_CARD, selectcolor=self.BG_INPUT)
+                cb.pack(side="left")
+
+                # Numero do voo
+                tk.Label(inner_row, text=v.numero_controle, bg=self.BG_CARD,
+                         fg=self.FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(5, 15))
+
+                # Origem/Destino
+                tk.Label(inner_row, text=v.etapas, bg=self.BG_CARD,
+                         fg=self.ACCENT, font=("Segoe UI", 9)).pack(side="left", padx=(0, 15))
+
+                # Data/Hora
+                tk.Label(inner_row, text=v.data_chegada, bg=self.BG_CARD,
+                         fg=self.FG_DIM, font=("Segoe UI", 9)).pack(side="left")
+
+        self.janela.after(0, _update)
+
+    def _selecionar_todos_voos(self):
+        for var in self._voos_checkboxes:
+            var.set(True)
+
+    def _desmarcar_todos_voos(self):
+        for var in self._voos_checkboxes:
+            var.set(False)
+
+    def _obter_voos_selecionados(self) -> List[Voo]:
+        """Retorna apenas os voos marcados com checkbox."""
+        selecionados = []
+        for i, var in enumerate(self._voos_checkboxes):
+            if var.get() and i < len(self._voos_encontrados):
+                selecionados.append(self._voos_encontrados[i])
+        return selecionados
 
     # ========= ACOES =========
 
@@ -275,18 +405,6 @@ class AppAutomacao:
         finally:
             self._processando = False
 
-    def _atualizar_lista_voos(self, voos: List[Voo]):
-        """Atualiza a lista visual de voos."""
-        def _update():
-            self.lista_voos.delete(0, tk.END)
-            opcoes_combo = []
-            for v in voos:
-                texto = f"{v.numero_controle} | {v.etapas} | {v.data_chegada} | {v.assinado}"
-                self.lista_voos.insert(tk.END, texto)
-                opcoes_combo.append(f"{v.numero_controle} - {v.etapas} {v.hora_chegada}")
-            self.combo_voos['values'] = opcoes_combo
-        self.janela.after(0, _update)
-
     def _iniciar_processamento_thread(self):
         """Inicia processamento completo em thread separada."""
         if self._processando:
@@ -297,11 +415,17 @@ class AppAutomacao:
             messagebox.showwarning("Aviso", "Busque os voos primeiro.")
             return
 
+        # Pega apenas os voos selecionados via checkbox
+        voos_selecionados = self._obter_voos_selecionados()
+        if not voos_selecionados:
+            messagebox.showwarning("Aviso", "Selecione pelo menos um voo.")
+            return
+
         confirma = messagebox.askyesno(
             "Confirmar",
-            f"Iniciar processamento de {len(self._voos_encontrados)} voos?\n\n"
+            f"Processar {len(voos_selecionados)} voo(s) selecionado(s)?\n\n"
             "Isso vai:\n"
-            "1. Verificar emails da SEFAZ\n"
+            "1. Verificar termos na SEFAZ\n"
             "2. Adicionar comentarios criticos\n"
             "3. Liberar AWBs sem termo\n\n"
             "Deseja continuar?"
@@ -312,24 +436,12 @@ class AppAutomacao:
         threading.Thread(target=self._processar_voos, daemon=True).start()
 
     def _processar_voos(self):
-        """Processamento completo de todos os voos."""
+        """Processamento completo dos voos selecionados."""
         self._salvar_credenciais()
         self._processando = True
 
-        # Determina quais voos processar
-        voos = self._voos_encontrados[:]
-
-        # Se "a partir de um voo" esta marcado, filtra
-        if self.usar_a_partir_de.get() and self.voo_selecionado.get():
-            voo_inicio = self.voo_selecionado.get().split(" - ")[0].strip()
-            encontrou = False
-            voos_filtrados = []
-            for v in voos:
-                if v.numero_controle == voo_inicio:
-                    encontrou = True
-                if encontrou:
-                    voos_filtrados.append(v)
-            voos = voos_filtrados
+        # Usa apenas os voos marcados via checkbox
+        voos = self._obter_voos_selecionados()
 
         self._log("=" * 60)
         self._log(f"INICIANDO PROCESSAMENTO DE {len(voos)} VOOS")
