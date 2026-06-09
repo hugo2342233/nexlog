@@ -24,6 +24,12 @@ from tkinter import ttk, messagebox, scrolledtext
 from datetime import datetime, timedelta
 from typing import List, Optional
 
+try:
+    from tkcalendar import DateEntry
+    HAS_CALENDAR = True
+except ImportError:
+    HAS_CALENDAR = False
+
 # Adiciona o diretorio ao path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -90,10 +96,10 @@ class AppAutomacao:
         self._voos_checkboxes: List[tk.BooleanVar] = []
         self._processando = False
 
-        # Datas padrao (ontem)
-        ontem = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
-        self.data_inicial.set(ontem)
-        self.data_final.set(ontem)
+        # Datas padrao (hoje)
+        hoje = datetime.now().strftime("%d/%m/%Y")
+        self.data_inicial.set(hoje)
+        self.data_final.set(hoje)
 
         # Carrega credenciais
         self._carregar_credenciais()
@@ -171,16 +177,43 @@ class AppAutomacao:
 
         tk.Label(inner, text="Periodo:", bg=self.BG_CARD, fg=self.FG_DIM,
                  font=("Segoe UI", 9)).pack(side="left")
-        e1 = tk.Entry(inner, textvariable=self.data_inicial, width=11,
-                      bg=self.BG_INPUT, fg=self.FG, insertbackground=self.FG,
-                      relief="flat", font=("Segoe UI", 10))
-        e1.pack(side="left", padx=(8, 4))
-        tk.Label(inner, text="a", bg=self.BG_CARD, fg=self.FG_DIM,
-                 font=("Segoe UI", 9)).pack(side="left")
-        e2 = tk.Entry(inner, textvariable=self.data_final, width=11,
-                      bg=self.BG_INPUT, fg=self.FG, insertbackground=self.FG,
-                      relief="flat", font=("Segoe UI", 10))
-        e2.pack(side="left", padx=(4, 15))
+
+        if HAS_CALENDAR:
+            # DateEntry com calendario clicavel
+            self.de_ini = DateEntry(inner, width=10, date_pattern="dd/MM/yyyy",
+                                    background=self.BG_INPUT, foreground=self.FG,
+                                    headersbackground=self.BG_CARD,
+                                    headersforeground=self.ACCENT,
+                                    selectbackground=self.ACCENT,
+                                    selectforeground="#000",
+                                    font=("Segoe UI", 10))
+            self.de_ini.set_date(datetime.now())
+            self.de_ini.pack(side="left", padx=(8, 4))
+
+            tk.Label(inner, text="a", bg=self.BG_CARD, fg=self.FG_DIM,
+                     font=("Segoe UI", 9)).pack(side="left")
+
+            self.de_fim = DateEntry(inner, width=10, date_pattern="dd/MM/yyyy",
+                                    background=self.BG_INPUT, foreground=self.FG,
+                                    headersbackground=self.BG_CARD,
+                                    headersforeground=self.ACCENT,
+                                    selectbackground=self.ACCENT,
+                                    selectforeground="#000",
+                                    font=("Segoe UI", 10))
+            self.de_fim.set_date(datetime.now())
+            self.de_fim.pack(side="left", padx=(4, 15))
+        else:
+            # Fallback: campos de texto normais (se tkcalendar nao instalado)
+            e1 = tk.Entry(inner, textvariable=self.data_inicial, width=11,
+                          bg=self.BG_INPUT, fg=self.FG, insertbackground=self.FG,
+                          relief="flat", font=("Segoe UI", 10))
+            e1.pack(side="left", padx=(8, 4))
+            tk.Label(inner, text="a", bg=self.BG_CARD, fg=self.FG_DIM,
+                     font=("Segoe UI", 9)).pack(side="left")
+            e2 = tk.Entry(inner, textvariable=self.data_final, width=11,
+                          bg=self.BG_INPUT, fg=self.FG, insertbackground=self.FG,
+                          relief="flat", font=("Segoe UI", 10))
+            e2.pack(side="left", padx=(4, 15))
 
         btn_buscar = tk.Button(inner, text="BUSCAR", command=self._buscar_voos_thread,
                                bg=self.ACCENT, fg="#000", font=("Segoe UI", 9, "bold"),
@@ -375,8 +408,14 @@ class AppAutomacao:
     def _buscar_voos(self):
         """Busca voos no Nexlog pela data selecionada."""
         self._salvar_credenciais()
-        data_ini = self.data_inicial.get().strip()
-        data_fim = self.data_final.get().strip()
+
+        # Pega datas do DateEntry ou do campo texto
+        if HAS_CALENDAR:
+            data_ini = self.de_ini.get()
+            data_fim = self.de_fim.get()
+        else:
+            data_ini = self.data_inicial.get().strip()
+            data_fim = self.data_final.get().strip()
 
         if not data_ini or not data_fim:
             messagebox.showwarning("Aviso", "Preencha as datas.")
@@ -496,8 +535,14 @@ class AppAutomacao:
     def _processar_um_voo(self, voo: Voo, browser, voos_mod, cte_mod, liberar_mod, outlook, sefaz) -> ResultadoProcessamento:
         """Processa um unico voo completo."""
         resultado = ResultadoProcessamento(voo=voo)
-        data_ini = self.data_inicial.get().strip()
-        data_fim = self.data_final.get().strip()
+
+        # Pega datas
+        if HAS_CALENDAR:
+            data_ini = self.de_ini.get()
+            data_fim = self.de_fim.get()
+        else:
+            data_ini = self.data_inicial.get().strip()
+            data_fim = self.data_final.get().strip()
 
         # --- ETAPA 1: Buscar chave MDF-e ---
         self._log("  [1/6] Buscando chave MDF-e...")
