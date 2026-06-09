@@ -12,7 +12,7 @@ Uso:
     bot.notificar("Processamento iniciado!")
     bot.parar()
 
-Requisito: pip install python-telegram-bot
+Requisito: pip install requests
 """
 
 import logging
@@ -21,17 +21,6 @@ import time
 import queue
 from datetime import datetime
 from typing import Optional, Callable, Dict, List, Any
-
-try:
-    import telegram
-    from telegram import Update, Bot
-    from telegram.ext import (
-        Application, CommandHandler, MessageHandler,
-        ContextTypes, filters,
-    )
-    HAS_TELEGRAM = True
-except ImportError:
-    HAS_TELEGRAM = False
 
 logger = logging.getLogger(__name__)
 
@@ -82,8 +71,12 @@ class TelegramBot:
 
     @property
     def disponivel(self) -> bool:
-        """Verifica se a lib python-telegram-bot esta instalada."""
-        return HAS_TELEGRAM
+        """Verifica se requests esta instalado."""
+        try:
+            import requests
+            return True
+        except ImportError:
+            return False
 
     def registrar_callbacks(self,
                             cb_iniciar: Optional[Callable] = None,
@@ -172,14 +165,10 @@ class TelegramBot:
             logger.warning("Telegram Bot: token ou chat_id nao configurados")
             return
 
-        if not HAS_TELEGRAM:
-            logger.warning("Telegram Bot: python-telegram-bot nao instalado")
-            return
-
         self._ativo = True
         self._thread = threading.Thread(target=self._loop_polling, daemon=True)
         self._thread.start()
-        logger.info("Telegram Bot iniciado (polling)")
+        logger.info(f"Telegram Bot iniciado (polling) - chat_id={self.chat_id}")
 
     def parar(self):
         """Para o bot."""
