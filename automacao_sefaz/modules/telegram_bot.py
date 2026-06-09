@@ -57,6 +57,7 @@ class TelegramBot:
         self._callback_status: Optional[Callable[[], str]] = None
         self._callback_voos: Optional[Callable[[], str]] = None
         self._callback_buscar: Optional[Callable] = None
+        self._callback_consultar: Optional[Callable] = None
 
         # Fila de comandos recebidos (para processamento no main thread)
         self.fila_comandos: queue.Queue = queue.Queue()
@@ -84,13 +85,15 @@ class TelegramBot:
                             cb_parar: Optional[Callable] = None,
                             cb_status: Optional[Callable[[], str]] = None,
                             cb_voos: Optional[Callable[[], str]] = None,
-                            cb_buscar: Optional[Callable] = None):
+                            cb_buscar: Optional[Callable] = None,
+                            cb_consultar: Optional[Callable] = None):
         """Registra callbacks do app principal para os comandos remotos."""
         self._callback_iniciar = cb_iniciar
         self._callback_parar = cb_parar
         self._callback_status = cb_status
         self._callback_voos = cb_voos
         self._callback_buscar = cb_buscar
+        self._callback_consultar = cb_consultar
 
     # ========= ENVIO DE NOTIFICACOES =========
 
@@ -238,6 +241,8 @@ class TelegramBot:
             self._responder_voos()
         elif comando == "/buscar":
             self._responder_buscar()
+        elif comando == "/consultar":
+            self._responder_consultar(text)
         elif comando in ("/ajuda", "/help", "/start"):
             self._responder_ajuda()
         else:
@@ -329,17 +334,46 @@ class TelegramBot:
         else:
             self._enviar_mensagem("Comando /buscar nao disponivel.")
 
+    def _responder_consultar(self, texto_completo: str):
+        """Responde ao /consultar <awb> — consulta status de AWB para cliente."""
+        partes = texto_completo.strip().split()
+        if len(partes) < 2:
+            self._enviar_mensagem(
+                "Uso: /consultar <numero_awb>\n"
+                "Exemplo: /consultar 12712345678"
+            )
+            return
+
+        awb = partes[1].strip()
+
+        # Valida formato basico (numeros, minimo 10 digitos)
+        if not awb.isdigit() or len(awb) < 10:
+            self._enviar_mensagem(
+                f"AWB invalido: {awb}\n"
+                "O AWB deve ter pelo menos 10 digitos numericos."
+            )
+            return
+
+        if self._callback_consultar:
+            self._enviar_mensagem(f"Consultando AWB {awb}...")
+            try:
+                self._callback_consultar(awb)
+            except Exception as e:
+                self._enviar_mensagem(f"Erro na consulta: {e}")
+        else:
+            self._enviar_mensagem("Consulta nao disponivel. Abra o Aero primeiro.")
+
     def _responder_ajuda(self):
         """Responde ao /ajuda."""
         msg = (
             "AERO Bot - Comandos\n\n"
-            "/status - Estado atual do processamento\n"
+            "/consultar <awb> - Consultar status de AWB (cliente)\n"
             "/buscar - Buscar voos de hoje\n"
-            "/iniciar - Iniciar processamento (voos de hoje)\n"
+            "/iniciar - Iniciar processamento\n"
             "/parar - Cancelar processamento\n"
+            "/status - Estado atual\n"
             "/voos - Listar voos encontrados\n"
-            "/ajuda - Esta mensagem\n\n"
-            "Notificacoes automaticas de inicio/fim/erros"
+            "/ajuda - Esta mensagem"
         )
         self._enviar_mensagem(msg)
 

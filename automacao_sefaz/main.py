@@ -614,6 +614,7 @@ class AppAutomacao:
             cb_status=self._telegram_cmd_status,
             cb_voos=self._telegram_cmd_voos,
             cb_buscar=self._telegram_cmd_buscar,
+            cb_consultar=self._telegram_cmd_consultar,
         )
 
         self._telegram_bot.iniciar()
@@ -660,6 +661,45 @@ class AppAutomacao:
         except Exception as e:
             if self._telegram_bot:
                 self._telegram_bot._enviar_mensagem(f"Erro ao buscar voos: {str(e)[:100]}")
+        finally:
+            self._processando = False
+
+    def _telegram_cmd_consultar(self, awb: str):
+        """Callback do Telegram /consultar <awb> — consulta status para cliente."""
+        if self._processando:
+            if self._telegram_bot:
+                self._telegram_bot._enviar_mensagem(
+                    "Processamento em andamento. Aguarde para consultar.")
+            return
+        threading.Thread(target=self._consultar_awb_telegram, args=(awb,), daemon=True).start()
+
+    def _consultar_awb_telegram(self, awb: str):
+        """Executa consulta de AWB e envia resultado pelo Telegram."""
+        self._processando = True
+        try:
+            from modules.consulta_cliente import ConsultaCliente
+
+            browser = NexlogBrowser()
+            browser.iniciar(headless=True)
+            browser.login_nexlog()
+
+            consulta = ConsultaCliente(browser)
+            resultado = consulta.consultar_awb(awb)
+
+            # Envia resposta formatada
+            resposta = resultado.resposta_cliente()
+            if self._telegram_bot:
+                self._telegram_bot._enviar_mensagem(resposta)
+
+            browser.fechar()
+
+        except Exception as e:
+            if self._telegram_bot:
+                self._telegram_bot._enviar_mensagem(f"Erro na consulta: {str(e)[:100]}")
+            try:
+                browser.fechar()
+            except Exception:
+                pass
         finally:
             self._processando = False
 
