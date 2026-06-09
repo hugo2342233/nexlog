@@ -20,9 +20,11 @@ import time
 import logging
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import messagebox, scrolledtext
 from datetime import datetime, timedelta
 from typing import List, Optional
+
+import customtkinter as ctk
 
 try:
     from tkcalendar import DateEntry
@@ -46,6 +48,10 @@ from modules.nexlog_liberar import NexlogLiberar
 from modules.outlook import OutlookWeb
 from modules.sefaz import SefazConsulta
 
+# ========= CUSTOMTKINTER CONFIG =========
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
+
 # ========= LOGGING =========
 LOG_FILE = PASTA_CONFIG / "execucao.log"
 logging.basicConfig(
@@ -62,23 +68,10 @@ logger = logging.getLogger("main")
 class AppAutomacao:
     """Interface principal da automacao."""
 
-    # Cores do tema dark minimalista
-    BG = "#0f0f0f"
-    BG_CARD = "#1a1a1a"
-    BG_INPUT = "#252525"
-    FG = "#e0e0e0"
-    FG_DIM = "#707070"
-    ACCENT = "#4fc3f7"
-    ACCENT_HOVER = "#81d4fa"
-    DANGER = "#ef5350"
-    SUCCESS = "#66bb6a"
-    BORDER = "#333333"
-
     def __init__(self):
-        self.janela = tk.Tk()
+        self.janela = ctk.CTk()
         self.janela.title("Retirada de Voos")
         self.janela.geometry("900x720")
-        self.janela.configure(bg=self.BG)
         self.janela.resizable(True, True)
 
         # Variaveis
@@ -124,158 +117,138 @@ class AppAutomacao:
         config.salvar()
 
     def _criar_interface(self):
-        """Interface minimalista dark."""
-        # Configura estilo ttk
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("TNotebook", background=self.BG, borderwidth=0)
-        style.configure("TNotebook.Tab", background=self.BG_CARD, foreground=self.FG,
-                       padding=[14, 6], font=("Segoe UI", 9))
-        style.map("TNotebook.Tab",
-                  background=[("selected", self.BG_INPUT)],
-                  foreground=[("selected", self.ACCENT)])
-
+        """Interface minimalista dark com CustomTkinter."""
         # Header
-        header = tk.Frame(self.janela, bg=self.BG, height=50)
-        header.pack(fill="x", padx=20, pady=(15, 5))
-        tk.Label(header, text="RETIRADA DE VOOS", bg=self.BG, fg=self.FG,
-                 font=("Segoe UI", 16, "bold")).pack(side="left")
-        tk.Label(header, text="SEFAZ-AL", bg=self.BG, fg=self.FG_DIM,
-                 font=("Segoe UI", 10)).pack(side="left", padx=10, pady=4)
+        header = ctk.CTkFrame(self.janela, fg_color="transparent", height=50)
+        header.pack(fill="x", padx=24, pady=(18, 6))
 
-        # Separador
-        tk.Frame(self.janela, bg=self.BORDER, height=1).pack(fill="x", padx=20)
+        ctk.CTkLabel(header, text="RETIRADA DE VOOS",
+                     font=ctk.CTkFont(size=18, weight="bold")).pack(side="left")
+        ctk.CTkLabel(header, text="SEFAZ-AL",
+                     font=ctk.CTkFont(size=11),
+                     text_color="#6b7280").pack(side="left", padx=12)
 
-        # Notebook (abas)
-        notebook = ttk.Notebook(self.janela)
-        notebook.pack(fill="both", expand=True, padx=20, pady=10)
+        # Tabview (abas)
+        self.tabview = ctk.CTkTabview(self.janela, corner_radius=8)
+        self.tabview.pack(fill="both", expand=True, padx=24, pady=(6, 18))
 
         # --- ABA VOOS ---
-        aba_voos = tk.Frame(notebook, bg=self.BG)
-        notebook.add(aba_voos, text="  Voos  ")
-        self._criar_aba_voos(aba_voos)
+        self.tabview.add("Voos")
+        self._criar_aba_voos(self.tabview.tab("Voos"))
 
         # --- ABA CREDENCIAIS ---
-        aba_cred = tk.Frame(notebook, bg=self.BG)
-        notebook.add(aba_cred, text="  Config  ")
-        self._criar_aba_credenciais(aba_cred)
+        self.tabview.add("Config")
+        self._criar_aba_credenciais(self.tabview.tab("Config"))
 
         # --- ABA LOG ---
-        aba_log = tk.Frame(notebook, bg=self.BG)
-        notebook.add(aba_log, text="  Log  ")
-        self._criar_aba_log(aba_log)
+        self.tabview.add("Log")
+        self._criar_aba_log(self.tabview.tab("Log"))
 
     def _criar_aba_voos(self, parent):
         """Aba principal com busca de voos e checkboxes."""
         # --- Barra de busca ---
-        frame_busca = tk.Frame(parent, bg=self.BG_CARD, highlightthickness=1,
-                               highlightbackground=self.BORDER)
-        frame_busca.pack(fill="x", padx=10, pady=(10, 5))
+        frame_busca = ctk.CTkFrame(parent, corner_radius=8)
+        frame_busca.pack(fill="x", padx=8, pady=(8, 4))
 
-        inner = tk.Frame(frame_busca, bg=self.BG_CARD)
-        inner.pack(fill="x", padx=15, pady=12)
+        inner = ctk.CTkFrame(frame_busca, fg_color="transparent")
+        inner.pack(fill="x", padx=16, pady=12)
 
-        tk.Label(inner, text="Periodo:", bg=self.BG_CARD, fg=self.FG_DIM,
-                 font=("Segoe UI", 9)).pack(side="left")
+        ctk.CTkLabel(inner, text="Periodo:",
+                     font=ctk.CTkFont(size=12)).pack(side="left")
 
         if HAS_CALENDAR:
-            # DateEntry com calendario clicavel
+            # DateEntry com calendario clicavel (widget tkinter, funciona dentro do CTk)
             self.de_ini = DateEntry(inner, width=10, date_pattern="dd/MM/yyyy",
-                                    background=self.BG_INPUT, foreground=self.FG,
-                                    headersbackground=self.BG_CARD,
-                                    headersforeground=self.ACCENT,
-                                    selectbackground=self.ACCENT,
-                                    selectforeground="#000",
+                                    background="#1f2937", foreground="#e5e7eb",
+                                    headersbackground="#111827",
+                                    headersforeground="#60a5fa",
+                                    selectbackground="#3b82f6",
+                                    selectforeground="#fff",
                                     font=("Segoe UI", 10))
             self.de_ini.set_date(datetime.now())
-            self.de_ini.pack(side="left", padx=(8, 4))
+            self.de_ini.pack(side="left", padx=(10, 6))
 
-            tk.Label(inner, text="a", bg=self.BG_CARD, fg=self.FG_DIM,
-                     font=("Segoe UI", 9)).pack(side="left")
+            ctk.CTkLabel(inner, text="a",
+                         font=ctk.CTkFont(size=12),
+                         text_color="#6b7280").pack(side="left")
 
             self.de_fim = DateEntry(inner, width=10, date_pattern="dd/MM/yyyy",
-                                    background=self.BG_INPUT, foreground=self.FG,
-                                    headersbackground=self.BG_CARD,
-                                    headersforeground=self.ACCENT,
-                                    selectbackground=self.ACCENT,
-                                    selectforeground="#000",
+                                    background="#1f2937", foreground="#e5e7eb",
+                                    headersbackground="#111827",
+                                    headersforeground="#60a5fa",
+                                    selectbackground="#3b82f6",
+                                    selectforeground="#fff",
                                     font=("Segoe UI", 10))
             self.de_fim.set_date(datetime.now())
-            self.de_fim.pack(side="left", padx=(4, 15))
+            self.de_fim.pack(side="left", padx=(6, 16))
         else:
-            # Fallback: campos de texto normais (se tkcalendar nao instalado)
-            e1 = tk.Entry(inner, textvariable=self.data_inicial, width=11,
-                          bg=self.BG_INPUT, fg=self.FG, insertbackground=self.FG,
-                          relief="flat", font=("Segoe UI", 10))
-            e1.pack(side="left", padx=(8, 4))
-            tk.Label(inner, text="a", bg=self.BG_CARD, fg=self.FG_DIM,
-                     font=("Segoe UI", 9)).pack(side="left")
-            e2 = tk.Entry(inner, textvariable=self.data_final, width=11,
-                          bg=self.BG_INPUT, fg=self.FG, insertbackground=self.FG,
-                          relief="flat", font=("Segoe UI", 10))
-            e2.pack(side="left", padx=(4, 15))
+            # Fallback: CTkEntry se tkcalendar nao instalado
+            e1 = ctk.CTkEntry(inner, textvariable=self.data_inicial, width=110,
+                              placeholder_text="dd/mm/aaaa",
+                              font=ctk.CTkFont(size=12))
+            e1.pack(side="left", padx=(10, 6))
 
-        btn_buscar = tk.Button(inner, text="BUSCAR", command=self._buscar_voos_thread,
-                               bg=self.ACCENT, fg="#000", font=("Segoe UI", 9, "bold"),
-                               relief="flat", cursor="hand2", padx=16, pady=2)
-        btn_buscar.pack(side="left")
+            ctk.CTkLabel(inner, text="a",
+                         font=ctk.CTkFont(size=12),
+                         text_color="#6b7280").pack(side="left")
+
+            e2 = ctk.CTkEntry(inner, textvariable=self.data_final, width=110,
+                              placeholder_text="dd/mm/aaaa",
+                              font=ctk.CTkFont(size=12))
+            e2.pack(side="left", padx=(6, 16))
+
+        ctk.CTkButton(inner, text="BUSCAR", command=self._buscar_voos_thread,
+                      width=100, height=32,
+                      font=ctk.CTkFont(size=12, weight="bold")).pack(side="left")
 
         # --- Lista de voos com checkboxes ---
-        frame_lista = tk.Frame(parent, bg=self.BG)
-        frame_lista.pack(fill="both", expand=True, padx=10, pady=5)
+        frame_lista = ctk.CTkFrame(parent, fg_color="transparent")
+        frame_lista.pack(fill="both", expand=True, padx=8, pady=4)
 
         # Header da lista
-        frame_lista_header = tk.Frame(frame_lista, bg=self.BG)
-        frame_lista_header.pack(fill="x")
+        frame_lista_header = ctk.CTkFrame(frame_lista, fg_color="transparent")
+        frame_lista_header.pack(fill="x", pady=(0, 4))
 
-        self.lbl_voos_count = tk.Label(frame_lista_header, text="Nenhum voo encontrado",
-                                        bg=self.BG, fg=self.FG_DIM, font=("Segoe UI", 9))
+        self.lbl_voos_count = ctk.CTkLabel(frame_lista_header,
+                                            text="Nenhum voo encontrado",
+                                            font=ctk.CTkFont(size=11),
+                                            text_color="#6b7280")
         self.lbl_voos_count.pack(side="left")
 
-        btn_todos = tk.Button(frame_lista_header, text="Selecionar todos",
-                              command=self._selecionar_todos_voos,
-                              bg=self.BG, fg=self.ACCENT, relief="flat",
-                              font=("Segoe UI", 8), cursor="hand2")
-        btn_todos.pack(side="right")
+        ctk.CTkButton(frame_lista_header, text="Selecionar todos",
+                      command=self._selecionar_todos_voos,
+                      width=110, height=26,
+                      fg_color="transparent", border_width=1,
+                      text_color="#60a5fa",
+                      font=ctk.CTkFont(size=11)).pack(side="right")
 
-        btn_nenhum = tk.Button(frame_lista_header, text="Nenhum",
-                               command=self._desmarcar_todos_voos,
-                               bg=self.BG, fg=self.FG_DIM, relief="flat",
-                               font=("Segoe UI", 8), cursor="hand2")
-        btn_nenhum.pack(side="right", padx=(0, 8))
+        ctk.CTkButton(frame_lista_header, text="Nenhum",
+                      command=self._desmarcar_todos_voos,
+                      width=70, height=26,
+                      fg_color="transparent", border_width=1,
+                      text_color="#6b7280",
+                      font=ctk.CTkFont(size=11)).pack(side="right", padx=(0, 8))
 
-        # Scrollable frame para os voos
-        self.canvas_voos = tk.Canvas(frame_lista, bg=self.BG, highlightthickness=0)
-        scrollbar = tk.Scrollbar(frame_lista, orient="vertical", command=self.canvas_voos.yview)
-        self.frame_voos_inner = tk.Frame(self.canvas_voos, bg=self.BG)
-
-        self.frame_voos_inner.bind("<Configure>",
-            lambda e: self.canvas_voos.configure(scrollregion=self.canvas_voos.bbox("all")))
-
-        self.canvas_voos.create_window((0, 0), window=self.frame_voos_inner, anchor="nw")
-        self.canvas_voos.configure(yscrollcommand=scrollbar.set)
-
-        self.canvas_voos.pack(side="left", fill="both", expand=True, pady=5)
-        scrollbar.pack(side="right", fill="y", pady=5)
-
-        # Bind scroll do mouse
-        self.canvas_voos.bind_all("<MouseWheel>",
-            lambda e: self.canvas_voos.yview_scroll(int(-1*(e.delta/120)), "units"))
+        # Scrollable frame para os voos (substitui Canvas+Scrollbar)
+        self.frame_voos_scroll = ctk.CTkScrollableFrame(frame_lista, corner_radius=6)
+        self.frame_voos_scroll.pack(fill="both", expand=True, pady=4)
 
         # --- Botao Iniciar ---
-        frame_bottom = tk.Frame(parent, bg=self.BG)
-        frame_bottom.pack(fill="x", padx=10, pady=(5, 10))
+        frame_bottom = ctk.CTkFrame(parent, fg_color="transparent")
+        frame_bottom.pack(fill="x", padx=8, pady=(4, 8))
 
-        self.btn_iniciar = tk.Button(frame_bottom, text="INICIAR PROCESSAMENTO",
-                                     command=self._iniciar_processamento_thread,
-                                     bg=self.SUCCESS, fg="#000",
-                                     font=("Segoe UI", 11, "bold"),
-                                     relief="flat", cursor="hand2", padx=20, pady=8)
+        self.btn_iniciar = ctk.CTkButton(
+            frame_bottom, text="INICIAR PROCESSAMENTO",
+            command=self._iniciar_processamento_thread,
+            width=220, height=40,
+            fg_color="#22c55e", hover_color="#16a34a",
+            text_color="#000000",
+            font=ctk.CTkFont(size=13, weight="bold"))
         self.btn_iniciar.pack(side="right")
 
     def _criar_aba_credenciais(self, parent):
         """Aba de configuracao / credenciais."""
-        frame = tk.Frame(parent, bg=self.BG)
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
         frame.pack(fill="both", expand=True, padx=30, pady=20)
 
         # Nexlog
@@ -291,26 +264,30 @@ class AppAutomacao:
 
         # Config
         self._section_label(frame, "GERAL", 9)
-        self._field(frame, "Timeout (s):", self.timeout_var, 10, width=8)
+        self._field(frame, "Timeout (s):", self.timeout_var, 10, width=100)
 
         # Salvar
-        tk.Button(frame, text="SALVAR", command=self._salvar_e_confirmar,
-                  bg=self.ACCENT, fg="#000", font=("Segoe UI", 9, "bold"),
-                  relief="flat", cursor="hand2", padx=20, pady=4
-                  ).grid(row=12, column=0, columnspan=2, pady=25)
+        ctk.CTkButton(frame, text="SALVAR", command=self._salvar_e_confirmar,
+                      width=140, height=36,
+                      font=ctk.CTkFont(size=12, weight="bold")
+                      ).grid(row=12, column=0, columnspan=2, pady=25)
 
     def _section_label(self, frame, text, row):
-        tk.Label(frame, text=text, bg=self.BG, fg=self.ACCENT,
-                 font=("Segoe UI", 10, "bold")).grid(
-            row=row, column=0, columnspan=2, sticky="w", pady=(15, 5))
+        ctk.CTkLabel(frame, text=text,
+                     font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color="#60a5fa").grid(
+            row=row, column=0, columnspan=2, sticky="w", pady=(18, 6))
 
-    def _field(self, frame, label, var, row, show="", width=25):
-        tk.Label(frame, text=label, bg=self.BG, fg=self.FG_DIM,
-                 font=("Segoe UI", 9)).grid(row=row, column=0, sticky="e", padx=(0, 10), pady=3)
-        entry = tk.Entry(frame, textvariable=var, width=width, show=show,
-                         bg=self.BG_INPUT, fg=self.FG, insertbackground=self.FG,
-                         relief="flat", font=("Segoe UI", 10))
-        entry.grid(row=row, column=1, sticky="w", pady=3)
+    def _field(self, frame, label, var, row, show="", width=220):
+        ctk.CTkLabel(frame, text=label,
+                     font=ctk.CTkFont(size=12),
+                     text_color="#9ca3af").grid(
+            row=row, column=0, sticky="e", padx=(0, 12), pady=4)
+
+        entry = ctk.CTkEntry(frame, textvariable=var, width=width,
+                             show=show if show else "",
+                             font=ctk.CTkFont(size=12))
+        entry.grid(row=row, column=1, sticky="w", pady=4)
 
     def _salvar_e_confirmar(self):
         self._salvar_credenciais()
@@ -322,7 +299,7 @@ class AppAutomacao:
             bg="#0a0a0a", fg="#b0b0b0", insertbackground="white",
             relief="flat", borderwidth=0
         )
-        self.log_widget.pack(fill="both", expand=True, padx=10, pady=10)
+        self.log_widget.pack(fill="both", expand=True, padx=8, pady=8)
 
     def _log(self, mensagem: str):
         """Adiciona mensagem ao log visual (thread-safe)."""
@@ -339,54 +316,65 @@ class AppAutomacao:
         """Recria a lista de checkboxes com os voos encontrados."""
         def _update():
             # Limpa lista anterior
-            for widget in self.frame_voos_inner.winfo_children():
+            for widget in self.frame_voos_scroll.winfo_children():
                 widget.destroy()
             self._voos_checkboxes.clear()
 
             if not voos:
-                self.lbl_voos_count.config(text="Nenhum voo encontrado")
+                self.lbl_voos_count.configure(text="Nenhum voo encontrado")
                 return
 
-            self.lbl_voos_count.config(text=f"{len(voos)} voo(s) encontrado(s)")
+            self.lbl_voos_count.configure(text=f"{len(voos)} voo(s) encontrado(s)")
 
             for i, v in enumerate(voos):
                 var = tk.BooleanVar(value=True)  # Todos marcados por padrao
                 self._voos_checkboxes.append(var)
 
-                # Frame do voo
-                row = tk.Frame(self.frame_voos_inner, bg=self.BG_CARD,
-                               highlightthickness=1, highlightbackground=self.BORDER)
-                row.pack(fill="x", pady=2)
+                # Frame do voo (card)
+                row = ctk.CTkFrame(self.frame_voos_scroll, corner_radius=6)
+                row.pack(fill="x", pady=3, padx=2)
 
-                inner_row = tk.Frame(row, bg=self.BG_CARD)
-                inner_row.pack(fill="x", padx=10, pady=8)
+                inner_row = ctk.CTkFrame(row, fg_color="transparent")
+                inner_row.pack(fill="x", padx=12, pady=8)
 
-                # Checkbox
-                cb = tk.Checkbutton(inner_row, variable=var, bg=self.BG_CARD,
-                                    activebackground=self.BG_CARD, selectcolor=self.BG_INPUT)
+                # Checkbox com numero do voo
+                cb = ctk.CTkCheckBox(inner_row, variable=var,
+                                     text=v.numero_controle,
+                                     font=ctk.CTkFont(size=12, weight="bold"),
+                                     width=24)
                 cb.pack(side="left")
 
-                # Numero do voo
-                tk.Label(inner_row, text=v.numero_controle, bg=self.BG_CARD,
-                         fg=self.FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(5, 15))
-
                 # Origem/Destino
-                tk.Label(inner_row, text=v.etapas, bg=self.BG_CARD,
-                         fg=self.ACCENT, font=("Segoe UI", 9)).pack(side="left", padx=(0, 15))
+                ctk.CTkLabel(inner_row, text=v.etapas,
+                             font=ctk.CTkFont(size=11),
+                             text_color="#60a5fa").pack(side="left", padx=(16, 0))
 
                 # Data/Hora
-                tk.Label(inner_row, text=v.data_chegada, bg=self.BG_CARD,
-                         fg=self.FG_DIM, font=("Segoe UI", 9)).pack(side="left")
+                ctk.CTkLabel(inner_row, text=v.data_chegada,
+                             font=ctk.CTkFont(size=11),
+                             text_color="#6b7280").pack(side="left", padx=(16, 0))
 
         self.janela.after(0, _update)
 
     def _selecionar_todos_voos(self):
         for var in self._voos_checkboxes:
             var.set(True)
+        # Update checkbox widgets
+        for widget in self.frame_voos_scroll.winfo_children():
+            for child in widget.winfo_children():
+                for cb in child.winfo_children():
+                    if isinstance(cb, ctk.CTkCheckBox):
+                        cb.select()
 
     def _desmarcar_todos_voos(self):
         for var in self._voos_checkboxes:
             var.set(False)
+        # Update checkbox widgets
+        for widget in self.frame_voos_scroll.winfo_children():
+            for child in widget.winfo_children():
+                for cb in child.winfo_children():
+                    if isinstance(cb, ctk.CTkCheckBox):
+                        cb.deselect()
 
     def _obter_voos_selecionados(self) -> List[Voo]:
         """Retorna apenas os voos marcados com checkbox."""
