@@ -129,8 +129,11 @@ class AppAutomacao:
         self._carregar_credenciais()
         self._criar_interface()
 
-        # Inicia Telegram Bot se configurado
-        self._iniciar_telegram_bot()
+        # Inicia Telegram Bot se configurado (nao bloqueia se falhar)
+        try:
+            self._iniciar_telegram_bot()
+        except Exception:
+            pass
 
     def _carregar_credenciais(self):
         if config.carregar():
@@ -758,9 +761,8 @@ class AppAutomacao:
 
         try:
             browser = NexlogBrowser()
-            # Headless = navegador invisivel (mais rapido, sem janela)
-            # Se o Nexlog der problema com headless, mude para browser.iniciar()
-            browser.iniciar(headless=True)
+            # Headless desativado para debug — mostra o navegador
+            browser.iniciar(headless=False)
             browser.login_nexlog()
 
             voos_mod = NexlogVoos(browser)
@@ -774,6 +776,10 @@ class AppAutomacao:
 
         except Exception as e:
             self._log(f"ERRO ao buscar voos: {e}")
+            try:
+                browser.fechar()
+            except Exception:
+                pass
             messagebox.showerror("Erro", str(e))
         finally:
             self._processando = False
