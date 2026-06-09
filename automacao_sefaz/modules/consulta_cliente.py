@@ -1,20 +1,14 @@
 """
 Modulo de consulta para atendimento ao cliente (WhatsApp/Telegram).
-Centraliza a busca de status de AWB usando a pesquisa rapida do Nexlog.
+Usa a busca rapida do Nexlog (quickSearch + quickTracking).
 
-Tudo que precisa esta na tela de rastreio (quickSearch + quickTracking):
-- Ultima movimentacao (ex: GRU > MCZ)
-- Status (Retido, Entregue, Aguardando entrega, Liberado, etc.)
-- Comentarios (se tem "RETIDO PELA SEFAZ TA" = tem termo)
-
-Cenarios de resposta ao cliente:
-1. Nao encontrado -> "AWB nao encontrado no sistema"
-2. Nao chegou em MCZ -> "Ainda nao chegou, ultima movimentacao em X"
-3. Chegou, liberado -> "Disponivel para retirada"
-4. Retido sem termo -> "Aguardando analise fiscal"
-5. Retido com termo -> "Retido com TA XXXXX"
-6. Entrega aguardando -> "Aguardando entrega / Em rota"
-7. Entregue -> "Ja foi entregue"
+A tela de rastreio que abre mostra:
+- CT-e/AWB: numero
+- Status operacional: Entregue / Retido / etc.
+- Servico: GCE - E-GOLLOG / MELI / etc.
+- Local de entrega: Entrega Domicilio / Retira Teca
+- Tabela de etapas com Local e Destino (movimentacoes)
+- Comentarios (via link "Adicionar comentarios")
 """
 
 import time
@@ -22,18 +16,16 @@ import re
 import logging
 from dataclasses import dataclass, field
 from typing import List
-from enum import Enum
 
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 
 logger = logging.getLogger(__name__)
 
 
-# ========= MODELOS =========
-
-class StatusAWB(Enum):
+class StatusAWB:
     LIBERADO = "liberado"
     RETIDO_SEM_TERMO = "retido_sem_termo"
     RETIDO_COM_TERMO = "retido_com_termo"
@@ -46,19 +38,21 @@ class StatusAWB(Enum):
 
 @dataclass
 class ResultadoConsulta:
-    """Resultado da consulta de um AWB."""
     awb: str = ""
-    status: StatusAWB = StatusAWB.NAO_ENCONTRADO
-    status_texto: str = ""          # Texto exato do status no Nexlog
-    ultima_movimentacao: str = ""   # Ex: "GRU > MCZ"
-    data_movimentacao: str = ""     # Ex: "09/06/2026 10:10"
-    tipo_entrega: str = ""          # "RETIRA" ou "ENTREGA"
-    termos: List[str] = field(default_factory=list)  # ["2410845", "2410848"]
-    comentarios: str = ""           # Texto completo dos comentarios
+    status: str = StatusAWB.NAO_ENCONTRADO
+    status_operacional: str = ""    # Texto exato: "Entregue", "Em trânsito", etc.
+    servico: str = ""               # "GCE - E-GOLLOG", "MELI", etc.
+    local_entrega: str = ""         # "Entrega Domicilio", "Retira Teca"
+    ultima_etapa: str = ""          # Ex: "Desembarque" ou "Embarque"
+    ultimo_local: str = ""          # Ex: "GRU"
+    ultimo_destino: str = ""        # Ex: "MCZ"
+    data_ultima_etapa: str = ""     # Ex: "06/06/2026 03:25:13"
+    termos: List[str] = field(default_factory=list)
+    tem_comentario_retido: bool = False
     observacao: str = ""
 
     def resposta_cliente(self) -> str:
-        """Gera texto pronto para copiar e colar no WhatsApp."""
+        """Texto pronto para copiar no WhatsApp."""
         linhas = []
         linhas.append(f"AWB {self.awb}")
 
@@ -66,57 +60,57 @@ class ResultadoConsulta:
             linhas.append("Nao encontrado no sistema.")
             return "\n".join(linhas)
 
-        if self.ultima_movimentacao:
-            linhas.append(f"Movimentacao: {self.ultima_movimentacao}")
-        if self.data_movimentacao:
-            linhas.append(f"Data: {self.data_movimentacao}")
-        if self.tipo_entrega:
-            linhas.append(f"Tipo: {self.tipo_entrega}")
+        if self.status_operacional:
+            linhas.append(f"Status: {self.status_operacional}")
+        if self.local_entrega:
+            linhas.append(f"Tipo: {self.local_entrega}")
+        if self.ultimo_local and self.ultimo_destino:
+            linhas.append(f"Movimentacao: {self.ultimo_local} > {self.ultimo_destino}")
+        if self.ultima_etapa:
+            linhas.append(f"Etapa: {self.ultima_etapa}")
+        if self.data_ultima_etapa:
+            linhas.append(f"Data: {self.data_ultima_etapa}")
 
         linhas.append("")
 
-        if self.status == StatusAWB.NAO_CHEGOU:
-            linhas.append("Status: AINDA NAO CHEGOU em MCZ.")
-            if self.observacao:
-                linhas.append(f"Ultima info: {self.observacao}")
+        # Mensagem baseada no status classificado
+        if self.status == StatusAWB.ENTREGUE:
+            linhas.append("Carga ja foi ENTREGUE.")
 
         elif self.status == StatusAWB.LIBERADO:
-            if self.tipo_entrega.upper() == "RETIRA":
-                linhas.append("Status: LIBERADO - Disponivel para retirada.")
+            if "RETIRA" in self.local_entrega.upper():
+                linhas.append("LIBERADO - Disponivel para retirada.")
             else:
-                linhas.append("Status: LIBERADO.")
+                linhas.append("LIBERADO.")
 
         elif self.status == StatusAWB.RETIDO_SEM_TERMO:
-            linhas.append("Status: RETIDO - Aguardando analise fiscal (SEFAZ).")
+            linhas.append("RETIDO - Aguardando analise fiscal (SEFAZ).")
+            linhas.append("Nenhum termo gerado ate o momento.")
 
         elif self.status == StatusAWB.RETIDO_COM_TERMO:
-            linhas.append("Status: RETIDO - Termo de Apreensao.")
+            linhas.append("RETIDO - Termo de Apreensao SEFAZ:")
             for ta in self.termos:
                 linhas.append(f"  TA {ta}")
 
+        elif self.status == StatusAWB.NAO_CHEGOU:
+            linhas.append("Ainda NAO CHEGOU em MCZ.")
+            if self.observacao:
+                linhas.append(self.observacao)
+
         elif self.status == StatusAWB.AGUARDANDO_ENTREGA:
-            linhas.append("Status: AGUARDANDO ENTREGA.")
-            linhas.append("A carga esta em MCZ, aguardando inclusao na rota.")
+            linhas.append("AGUARDANDO ENTREGA - Carga em MCZ, aguardando rota.")
 
         elif self.status == StatusAWB.EM_ROTA_ENTREGA:
-            linhas.append("Status: SAIU PARA ENTREGA.")
-
-        elif self.status == StatusAWB.ENTREGUE:
-            linhas.append("Status: ENTREGUE.")
+            linhas.append("SAIU PARA ENTREGA.")
 
         if self.observacao and self.status not in (StatusAWB.NAO_CHEGOU,):
-            linhas.append(f"\nObs: {self.observacao}")
+            linhas.append(f"\n{self.observacao}")
 
         return "\n".join(linhas)
 
 
-# ========= CLASSE PRINCIPAL =========
-
 class ConsultaCliente:
-    """
-    Consulta AWB usando a busca rapida do Nexlog (quickSearch).
-    Tudo que precisa esta na tela de rastreio que abre ao buscar o AWB.
-    """
+    """Consulta AWB usando a busca rapida do Nexlog (quickSearch + quickTracking)."""
 
     def __init__(self, browser):
         self.browser = browser
@@ -125,18 +119,14 @@ class ConsultaCliente:
 
     def consultar_awb(self, awb: str) -> ResultadoConsulta:
         """
-        Consulta completa de um AWB usando a busca rapida do Nexlog.
-
+        Consulta um AWB pela busca rapida do Nexlog.
+        
         Fluxo:
-        1. Digita AWB no quickSearch e clica no alvo (quickTracking)
-        2. Le o conteudo da tela de rastreio que abre:
-           - Ultima movimentacao / rota
-           - Status atual (Retido, Liberado, Entregue, etc.)
-           - Comentarios (verifica se tem "RETIDO PELA SEFAZ TA")
-        3. Classifica e gera resposta pro cliente
-
-        Returns:
-            ResultadoConsulta com texto pronto pra WhatsApp
+        1. Digita AWB no quickSearch, clica quickTracking (icone alvo)
+        2. Abre modal "Rastreio" com status, etapas, etc.
+        3. Le: status operacional, local entrega, etapas (tabela)
+        4. Verifica comentarios para detectar termos SEFAZ
+        5. Fecha modal
         """
         resultado = ResultadoConsulta(awb=awb)
 
@@ -145,146 +135,312 @@ class ConsultaCliente:
             self.browser._fechar_modais()
             time.sleep(1)
 
-            # Busca rapida pelo AWB (abre tela de rastreio)
-            self.browser.busca_rapida(awb)
-            time.sleep(4)
+            # Digita AWB no campo de pesquisa rapida
+            campo = self.wait.until(
+                EC.visibility_of_element_located((By.ID, "quickSearch"))
+            )
+            campo.click()
+            campo.send_keys(Keys.CONTROL, "a")
+            campo.send_keys(Keys.BACKSPACE)
+            time.sleep(0.3)
+            campo.send_keys(awb)
 
-            # Le todo o conteudo visivel na tela/modal de rastreio
-            texto_tela = self._extrair_texto_rastreio()
+            # Clica no icone alvo (quickTracking)
+            botao = self.wait.until(
+                EC.element_to_be_clickable((By.ID, "quickTracking-icon"))
+            )
+            botao.click()
+            time.sleep(5)
 
-            if not texto_tela:
+            # Aguarda modal de rastreio abrir
+            # O modal tem titulo "Rastreio" e contem o AWB
+            modal_abriu = self._aguardar_modal_rastreio(awb)
+
+            if not modal_abriu:
                 resultado.status = StatusAWB.NAO_ENCONTRADO
                 self.browser._fechar_modais()
                 return resultado
 
-            # Extrai informacoes do texto
-            self._classificar_status(resultado, texto_tela)
+            # Extrai dados do modal
+            self._extrair_dados_modal(resultado)
 
-            # Fecha a tela de rastreio
-            self.browser._fechar_modais()
-            time.sleep(1)
+            # Verifica comentarios (termos SEFAZ)
+            self._verificar_comentarios(resultado)
+
+            # Classifica status final
+            self._classificar_status(resultado)
+
+            # Fecha modal
+            self._fechar_modal_rastreio()
 
         except Exception as e:
-            resultado.observacao = f"Erro: {str(e)[:80]}"
-            self.browser._fechar_modais()
+            resultado.status = StatusAWB.NAO_ENCONTRADO
+            resultado.observacao = str(e)[:80]
+            try:
+                self.browser._fechar_modais()
+            except Exception:
+                pass
 
         return resultado
 
-    def _extrair_texto_rastreio(self) -> str:
-        """
-        Extrai o texto completo da tela de rastreio aberta.
-        Tenta pegar do modal ou da pagina inteira.
-        """
-        texto = ""
-
+    def _aguardar_modal_rastreio(self, awb: str) -> bool:
+        """Aguarda o modal de rastreio abrir e verificar que contem o AWB."""
         try:
-            # Tenta ler do modal aberto
-            modais = self.driver.find_elements(By.XPATH,
-                "//div[contains(@class,'modal') and contains(@class,'show')]"
-                " | //div[contains(@class,'modal')][contains(@style,'display: block')]"
-                " | //div[contains(@class,'modal')]//div[contains(@class,'modal-body')]"
+            # Espera ate 10s por algum elemento do modal de rastreio
+            self.wait.until(
+                EC.presence_of_element_located((By.XPATH,
+                    "//div[contains(@class,'modal')]//h4[contains(.,'Rastreio')]"
+                    " | //div[contains(@class,'modal')]//*[contains(.,'CT-e')]"
+                    " | //div[contains(@class,'modal')]//*[contains(.,'Status operacional')]"
+                ))
+            )
+            time.sleep(2)
+            return True
+        except TimeoutException:
+            # Tenta verificar se tem algum modal aberto mesmo sem o titulo
+            try:
+                modais = self.driver.find_elements(By.XPATH,
+                    "//div[contains(@class,'modal')][contains(@style,'display: block')]"
+                    " | //div[contains(@class,'modal') and contains(@class,'show')]"
+                    " | //div[contains(@class,'modal')]//div[contains(@class,'modal-content')]"
+                )
+                for modal in modais:
+                    if modal.is_displayed() and awb in modal.text:
+                        return True
+            except Exception:
+                pass
+            return False
+
+    def _extrair_dados_modal(self, resultado: ResultadoConsulta):
+        """Extrai todas as informacoes visiveis do modal de rastreio."""
+        try:
+            # Pega o texto completo do modal
+            texto_modal = ""
+            try:
+                modal = self.driver.find_element(By.XPATH,
+                    "//div[contains(@class,'modal')]//div[contains(@class,'modal-body')]"
+                    " | //div[contains(@class,'modal') and contains(@class,'show')]"
+                )
+                texto_modal = modal.text
+            except Exception:
+                texto_modal = self.driver.find_element(By.TAG_NAME, "body").text
+
+            texto_upper = texto_modal.upper()
+
+            # --- Status operacional ---
+            # Procura texto apos "Status operacional:" 
+            match_status = re.search(
+                r'STATUS\s*OPERACIONAL[:\s]*([^\n]+)', texto_modal, re.IGNORECASE)
+            if match_status:
+                resultado.status_operacional = match_status.group(1).strip()
+            else:
+                # Tenta pegar de um elemento especifico
+                try:
+                    elem_status = self.driver.find_element(By.XPATH,
+                        "//div[contains(@class,'modal')]//*[contains(.,'Status operacional')]"
+                        "/following-sibling::*[1]"
+                        " | //div[contains(@class,'modal')]//span[contains(@class,'text-success') "
+                        "or contains(@class,'text-danger') or contains(@class,'text-warning')]"
+                    )
+                    resultado.status_operacional = elem_status.text.strip()
+                except Exception:
+                    pass
+
+            # --- Servico ---
+            match_servico = re.search(
+                r'SERVI[CÇ]O[:\s]*([^\n]+)', texto_modal, re.IGNORECASE)
+            if match_servico:
+                resultado.servico = match_servico.group(1).strip()
+
+            # --- Local de entrega ---
+            match_local = re.search(
+                r'LOCAL\s*DE\s*ENTREGA[:\s]*([^\n]+)', texto_modal, re.IGNORECASE)
+            if match_local:
+                resultado.local_entrega = match_local.group(1).strip()
+
+            # --- Etapas da tabela (ultima etapa, local, destino, data) ---
+            self._extrair_ultima_etapa(resultado)
+
+        except Exception as e:
+            logger.debug(f"Extrair dados modal erro: {e}")
+
+    def _extrair_ultima_etapa(self, resultado: ResultadoConsulta):
+        """Extrai a ultima etapa da tabela de rastreio dentro do modal."""
+        try:
+            # Busca todas as linhas da tabela dentro do modal
+            linhas = self.driver.find_elements(By.XPATH,
+                "//div[contains(@class,'modal')]//table//tbody//tr"
             )
 
-            for modal in modais:
+            if not linhas:
+                return
+
+            # Pega a ultima linha com dados
+            for linha in reversed(linhas):
                 try:
-                    if modal.is_displayed():
-                        t = modal.text.strip()
-                        if len(t) > len(texto):
-                            texto = t
+                    colunas = linha.find_elements(By.TAG_NAME, "td")
+                    if len(colunas) < 5:
+                        continue
+
+                    texto_linha = linha.text.strip()
+                    if not texto_linha:
+                        continue
+
+                    # Estrutura da tabela observada:
+                    # Etapa | Sigla | Acoes | Id. operacao | Local | Destino | Data | Obs | Resp | Ref
+                    # Indices podem variar, vamos buscar por conteudo
+
+                    for i, col in enumerate(colunas):
+                        texto_col = col.text.strip()
+
+                        # Sigla de 3 letras = Local ou Destino
+                        if re.match(r'^[A-Z]{3}$', texto_col):
+                            if not resultado.ultimo_local:
+                                resultado.ultimo_local = texto_col
+                            else:
+                                resultado.ultimo_destino = texto_col
+
+                        # Data
+                        if re.match(r'\d{2}/\d{2}/\d{4}', texto_col):
+                            resultado.data_ultima_etapa = texto_col
+
+                        # Nome da etapa (Reserva, Embarque, Desembarque, etc.)
+                        if texto_col in ("Reserva", "Embarque", "Desembarque",
+                                        "Pré-despacho - Em aberto", "Corte de Carga",
+                                        "Emissão Conhecimento", "Consolidado",
+                                        "Entrega", "Saiu para entrega"):
+                            resultado.ultima_etapa = texto_col
+
+                    if resultado.ultimo_local or resultado.ultima_etapa:
+                        break  # Encontrou dados na ultima linha
+
                 except Exception:
                     continue
-
-            # Se nao encontrou modal, pega o body inteiro (pagina de rastreio inline)
-            if not texto or len(texto) < 20:
-                body = self.driver.find_element(By.TAG_NAME, "body")
-                texto = body.text
 
         except Exception:
             pass
 
-        return texto
-
-    def _classificar_status(self, resultado: ResultadoConsulta, texto: str):
+    def _verificar_comentarios(self, resultado: ResultadoConsulta):
         """
-        Analisa o texto da tela de rastreio e classifica o status do AWB.
+        Verifica nos comentarios do AWB se tem termo SEFAZ.
+        
+        Na tela de rastreio tem o link "Adicionar comentarios" no canto.
+        Ao clicar, abre os comentarios existentes.
+        Alternativa: le o texto visivel do modal que pode ja conter comentarios.
         """
-        texto_upper = texto.upper()
+        try:
+            # Primeiro verifica se o texto do modal ja tem info de termo
+            texto_modal = ""
+            try:
+                modal = self.driver.find_element(By.XPATH,
+                    "//div[contains(@class,'modal')]//div[contains(@class,'modal-body')]"
+                    " | //div[contains(@class,'modal') and contains(@class,'show')]"
+                )
+                texto_modal = modal.text
+            except Exception:
+                return
 
-        # --- Tipo de entrega ---
-        if "RETIRA" in texto_upper:
-            resultado.tipo_entrega = "RETIRA"
-        elif "DOMIC" in texto_upper or "ENTREGA" in texto_upper:
-            resultado.tipo_entrega = "ENTREGA"
+            # Verifica se ja tem mencion a termo no texto visivel
+            if "RETIDO PELA SEFAZ" in texto_modal.upper():
+                resultado.tem_comentario_retido = True
+                termos = re.findall(r'TA\s*(\d{5,})', texto_modal, re.IGNORECASE)
+                resultado.termos = list(set(termos))
+                return
 
-        # --- Ultima movimentacao (rota tipo GRU > MCZ ou CGH/MCZ) ---
-        match_rota = re.search(
-            r'([A-Z]{3})\s*[>/\-]\s*([A-Z]{3})', texto)
-        if match_rota:
-            resultado.ultima_movimentacao = f"{match_rota.group(1)} > {match_rota.group(2)}"
+            # Se nao encontrou no texto visivel, tenta abrir comentarios
+            try:
+                link_comentarios = self.driver.find_element(By.XPATH,
+                    "//div[contains(@class,'modal')]//a[contains(.,'coment')]"
+                    " | //a[contains(.,'Adicionar coment')]"
+                )
+                link_comentarios.click()
+                time.sleep(3)
 
-        # --- Data mais recente ---
-        datas = re.findall(r'\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}', texto)
-        if datas:
-            resultado.data_movimentacao = datas[-1]
+                # Le texto dos comentarios
+                texto_comentarios = self.driver.find_element(By.TAG_NAME, "body").text
 
-        # --- Comentarios com termos ---
-        termos_encontrados = re.findall(r'TA\s*(\d{5,})', texto, re.IGNORECASE)
-        if termos_encontrados:
-            resultado.termos = list(set(termos_encontrados))
+                if "RETIDO PELA SEFAZ" in texto_comentarios.upper():
+                    resultado.tem_comentario_retido = True
+                    termos = re.findall(r'TA\s*(\d{5,})', texto_comentarios, re.IGNORECASE)
+                    resultado.termos = list(set(termos))
 
-        # Texto de comentarios "RETIDO PELA SEFAZ"
-        if "RETIDO PELA SEFAZ" in texto_upper:
-            resultado.comentarios = "RETIDO PELA SEFAZ"
+                # Fecha popup de comentarios
+                try:
+                    btn_fechar = self.driver.find_element(By.XPATH,
+                        "(//button[contains(.,'Fechar')])[last()]"
+                    )
+                    btn_fechar.click()
+                    time.sleep(1)
+                except Exception:
+                    pass
 
-        # --- Classificar status principal ---
+            except Exception:
+                pass  # Link de comentarios nao encontrado — OK
 
-        # Verificar se chegou em MCZ
-        chegou = ("MCZ" in texto_upper and (
-            "RECEBID" in texto_upper or
-            "CHEGAD" in texto_upper or
-            "DESEMBARCAD" in texto_upper or
-            "RETID" in texto_upper or
-            "LIBERAD" in texto_upper or
-            "ENTREG" in texto_upper
-        ))
+        except Exception:
+            pass
 
-        if not chegou and "MCZ" not in texto_upper:
-            resultado.status = StatusAWB.NAO_CHEGOU
-            # Pega ultima linha significativa como observacao
-            linhas = [l.strip() for l in texto.split("\n") if l.strip() and len(l.strip()) > 3]
-            if linhas:
-                resultado.observacao = linhas[-1][:100]
+    def _classificar_status(self, resultado: ResultadoConsulta):
+        """Classifica o status final baseado nos dados extraidos."""
+        status_op = resultado.status_operacional.upper()
+        local_entrega = resultado.local_entrega.upper()
+
+        # Entregue
+        if "ENTREG" in status_op and "AGUARDANDO" not in status_op:
+            resultado.status = StatusAWB.ENTREGUE
             return
 
-        # Verificar status especificos (ordem importa)
-        if "ENTREG" in texto_upper and "AGUARDANDO" not in texto_upper:
-            resultado.status = StatusAWB.ENTREGUE
+        # Verificar se chegou em MCZ
+        chegou_mcz = (resultado.ultimo_destino == "MCZ" or
+                      "MCZ" in resultado.ultimo_local or
+                      "DESEMBARQ" in resultado.ultima_etapa.upper())
 
-        elif "SAIU PARA" in texto_upper or "EM ROTA" in texto_upper:
-            resultado.status = StatusAWB.EM_ROTA_ENTREGA
+        if not chegou_mcz and resultado.ultimo_destino and resultado.ultimo_destino != "MCZ":
+            resultado.status = StatusAWB.NAO_CHEGOU
+            resultado.observacao = (
+                f"Em transito: {resultado.ultimo_local} > {resultado.ultimo_destino}")
+            return
 
-        elif "AGUARDANDO ENTREGA" in texto_upper:
-            resultado.status = StatusAWB.AGUARDANDO_ENTREGA
-
-        elif "RETID" in texto_upper:
-            # Retido — verificar se tem termo
-            if resultado.termos or "RETIDO PELA SEFAZ" in texto_upper:
+        # Retido
+        if "RETID" in status_op:
+            if resultado.tem_comentario_retido and resultado.termos:
                 resultado.status = StatusAWB.RETIDO_COM_TERMO
             else:
                 resultado.status = StatusAWB.RETIDO_SEM_TERMO
+            return
 
-        elif "LIBERAD" in texto_upper:
+        # Liberado
+        if "LIBERAD" in status_op:
             resultado.status = StatusAWB.LIBERADO
+            return
 
+        # Aguardando entrega
+        if "AGUARDANDO" in status_op:
+            resultado.status = StatusAWB.AGUARDANDO_ENTREGA
+            return
+
+        # Em rota
+        if "ROTA" in status_op or "SAIU" in status_op:
+            resultado.status = StatusAWB.EM_ROTA_ENTREGA
+            return
+
+        # Se nao identificou claramente mas chegou, usa o status_operacional como esta
+        if status_op:
+            resultado.status = StatusAWB.LIBERADO
+            resultado.observacao = f"Status no sistema: {resultado.status_operacional}"
         else:
-            # Chegou mas status nao identificado claramente
-            # Se nao ta retido e nao ta entregue, considera liberado
-            resultado.status = StatusAWB.LIBERADO
-            resultado.observacao = "Status exato nao identificado na tela."
+            resultado.status = StatusAWB.NAO_ENCONTRADO
 
-        # Guarda o texto do status encontrado para referencia
-        for palavra in ["RETIDO", "LIBERADO", "ENTREGUE", "AGUARDANDO",
-                        "SAIU PARA ENTREGA", "EM ROTA"]:
-            if palavra in texto_upper:
-                resultado.status_texto = palavra.capitalize()
-                break
+    def _fechar_modal_rastreio(self):
+        """Fecha o modal de rastreio (clica no X ou Fechar)."""
+        try:
+            # Tenta o X do modal
+            btn = self.driver.find_element(By.XPATH,
+                "//div[contains(@class,'modal')]//button[contains(@class,'close')]"
+                " | //div[contains(@class,'modal')]//button[@aria-label='Close']"
+                " | //div[contains(@class,'modal')]//button[contains(.,'Fechar')]"
+            )
+            btn.click()
+            time.sleep(1)
+        except Exception:
+            self.browser._fechar_modais()
