@@ -565,16 +565,29 @@ class AppAutomacao:
         self._iniciar_telegram_bot()
 
     def _testar_telegram(self):
-        """Testa conexao com o bot Telegram."""
+        """Testa conexao com o bot Telegram (em thread para nao travar)."""
         self._salvar_credenciais()
-        bot = TelegramBot(self.tg_token.get(), self.tg_chat_id.get())
-        if not bot.configurado:
+        token = self.tg_token.get().strip()
+        chat_id = self.tg_chat_id.get().strip()
+
+        if not token or not chat_id:
             messagebox.showwarning("Telegram", "Preencha Token e Chat ID.")
             return
-        if bot.testar_conexao():
-            messagebox.showinfo("Telegram", "Conexao OK! Mensagem enviada no Telegram.")
-        else:
-            messagebox.showerror("Telegram", "Falha na conexao. Verifique o token e chat ID.")
+
+        self._log("Testando conexao Telegram...")
+
+        def _teste():
+            bot = TelegramBot(token, chat_id)
+            if bot.testar_conexao():
+                self.janela.after(0, lambda: messagebox.showinfo(
+                    "Telegram", "Conexao OK! Mensagem enviada no Telegram."))
+                self._log("Telegram: teste OK!")
+            else:
+                self.janela.after(0, lambda: messagebox.showerror(
+                    "Telegram", "Falha na conexao. Verifique o token e chat ID."))
+                self._log("Telegram: teste FALHOU")
+
+        threading.Thread(target=_teste, daemon=True).start()
 
     def _iniciar_telegram_bot(self):
         """Inicia ou reinicia o bot Telegram se configurado e ativo."""
