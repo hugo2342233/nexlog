@@ -466,16 +466,25 @@ class AppAutomacao:
                 consulta = sefaz.consultar_chave_mdfe(chave)
 
                 if consulta:
-                    # SEGURANCA: Se status DESCONHECIDO com 0 termos, o relatorio
-                    # nao foi extraido corretamente.
-                    if consulta.status.value == "desconhecido" and consulta.total_termos == 0:
+                    # SEGURANCA: Bloqueia APENAS se relatorio NAO foi extraido
+                    # (status desconhecido + 0 termos + lista vazia)
+                    # Se o parser retornou status real (liberado, sem pendencias, etc)
+                    # com 0 termos, e CONFIAVEL — pode liberar.
+                    relatorio_nao_extraido = (
+                        consulta.status.value == "desconhecido"
+                        and consulta.total_termos == 0
+                        and not consulta.termos
+                        and not consulta.numero_mdfe
+                    )
+                    if relatorio_nao_extraido:
                         self._log("  Site SEFAZ: INCONCLUSIVO (relatorio nao extraido)")
                         self._log("  SEGURANCA: NAO libera este voo - consultar manualmente")
                         resultado.erros.append("SEFAZ inconclusivo - consultar manualmente")
                         sefaz.voltar_para_nexlog()
                         return resultado
                     else:
-                        self._log(f"  Site SEFAZ: {consulta.total_termos} termos")
+                        self._log(f"  Site SEFAZ: {consulta.total_termos} termos "
+                                 f"(status: {consulta.status.value})")
                 else:
                     self._log("  Site SEFAZ: sem resultado")
                     # Nao respondeu no email E nao tem no site — pula voo
