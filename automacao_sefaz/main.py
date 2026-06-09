@@ -572,10 +572,9 @@ class AppAutomacao:
             messagebox.showwarning("Telegram", "Preencha Token e Chat ID.")
             return
         if bot.testar_conexao():
-            bot.notificar("\u2705 *AERO Bot conectado!*\nNotificacoes configuradas com sucesso.")
-            messagebox.showinfo("Telegram", "Conexao OK! Mensagem de teste enviada.")
+            messagebox.showinfo("Telegram", "Conexao OK! Mensagem enviada no Telegram.")
         else:
-            messagebox.showerror("Telegram", "Falha na conexao. Verifique o token.")
+            messagebox.showerror("Telegram", "Falha na conexao. Verifique o token e chat ID.")
 
     def _iniciar_telegram_bot(self):
         """Inicia ou reinicia o bot Telegram se configurado e ativo."""

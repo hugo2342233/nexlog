@@ -356,28 +356,50 @@ class TelegramBot:
             payload = {
                 "chat_id": self.chat_id,
                 "text": texto,
-                "parse_mode": "Markdown",
             }
             resp = requests.post(url, json=payload, timeout=10)
             if resp.status_code != 200:
-                logger.warning(f"Telegram envio falhou: {resp.status_code} - {resp.text[:100]}")
+                logger.warning(f"Telegram envio falhou: {resp.status_code} - {resp.text[:200]}")
+            else:
+                logger.debug(f"Telegram mensagem enviada OK")
         except Exception as e:
             logger.error(f"Telegram envio erro: {e}")
 
     def testar_conexao(self) -> bool:
-        """Testa se o bot consegue enviar mensagem."""
+        """
+        Testa se o bot consegue enviar mensagem.
+        Envia uma mensagem de teste diretamente (sem thread).
+        """
         if not self.configurado:
             return False
 
         try:
             import requests
+
+            # 1. Verifica token
             url = f"https://api.telegram.org/bot{self.bot_token}/getMe"
             resp = requests.get(url, timeout=10)
-            if resp.status_code == 200 and resp.json().get("ok"):
-                bot_info = resp.json()["result"]
-                logger.info(f"Telegram Bot OK: @{bot_info.get('username', '?')}")
+            if resp.status_code != 200 or not resp.json().get("ok"):
+                logger.error(f"Telegram token invalido: {resp.text[:100]}")
+                return False
+
+            bot_info = resp.json()["result"]
+            logger.info(f"Telegram Bot OK: @{bot_info.get('username', '?')}")
+
+            # 2. Envia mensagem de teste DIRETAMENTE (nao em thread)
+            url_send = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+            payload = {
+                "chat_id": self.chat_id,
+                "text": "AERO Bot conectado!\nNotificacoes configuradas com sucesso.",
+            }
+            resp2 = requests.post(url_send, json=payload, timeout=10)
+            if resp2.status_code == 200:
+                logger.info("Mensagem de teste enviada com sucesso")
                 return True
-            return False
+            else:
+                logger.error(f"Telegram envio teste falhou: {resp2.status_code} - {resp2.text[:200]}")
+                return False
+
         except Exception as e:
             logger.error(f"Telegram teste falhou: {e}")
             return False
