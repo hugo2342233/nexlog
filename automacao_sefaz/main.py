@@ -124,7 +124,7 @@ class AppAutomacao:
 
         ctk.CTkLabel(header, text="AERO",
                      font=ctk.CTkFont(size=18, weight="bold")).pack(side="left")
-        ctk.CTkLabel(header, text="Operacoes Aereas",
+        ctk.CTkLabel(header, text="Gollog",
                      font=ctk.CTkFont(size=11),
                      text_color="#6b7280").pack(side="left", padx=12)
 
