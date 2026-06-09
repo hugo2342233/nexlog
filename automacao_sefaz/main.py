@@ -414,7 +414,9 @@ class AppAutomacao:
 
         try:
             browser = NexlogBrowser()
-            browser.iniciar()
+            # Headless = navegador invisivel (mais rapido, sem janela)
+            # Se o Nexlog der problema com headless, mude para browser.iniciar()
+            browser.iniciar(headless=True)
             browser.login_nexlog()
 
             voos_mod = NexlogVoos(browser)
