@@ -22,7 +22,7 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, scrolledtext
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 import customtkinter as ctk
 
@@ -47,6 +47,7 @@ from modules.nexlog_cte import NexlogCTeOperacoes
 from modules.nexlog_liberar import NexlogLiberar
 from modules.outlook import OutlookWeb
 from modules.sefaz import SefazConsulta
+from modules.telegram_bot import TelegramBot
 
 # ========= CUSTOMTKINTER CONFIG =========
 ctk.set_appearance_mode("dark")
@@ -63,6 +64,25 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("main")
+
+
+# ========= STATUS DO VOO (PROGRESSO) =========
+class StatusVoo:
+    """Estado de processamento de um voo individual."""
+    PENDENTE = "pendente"
+    PROCESSANDO = "processando"
+    CONCLUIDO = "concluido"
+    ERRO = "erro"
+
+
+ETAPAS_VOO = [
+    "Buscando chave MDF-e",
+    "Baixando manifesto",
+    "Verificando Outlook",
+    "Consultando SEFAZ",
+    "Adicionando comentarios",
+    "Liberando AWBs",
+]
 
 
 class AppAutomacao:
@@ -83,11 +103,22 @@ class AppAutomacao:
         self.data_inicial = tk.StringVar()
         self.data_final = tk.StringVar()
         self.timeout_var = tk.IntVar(value=20)
+        self.tg_token = tk.StringVar()
+        self.tg_chat_id = tk.StringVar()
+        self.tg_ativo = tk.BooleanVar(value=False)
 
         # Estado
         self._voos_encontrados: List[Voo] = []
         self._voos_checkboxes: List[tk.BooleanVar] = []
         self._processando = False
+
+        # Estado de progresso (para a tela de progresso na aba Voos)
+        self._progresso_voos: Dict[int, dict] = {}  # indice -> {status, etapa, msg}
+        self._progresso_widgets: Dict[int, dict] = {}  # indice -> {icon, etapa_lbl, msg_lbl}
+
+        # Telegram Bot
+        self._telegram_bot: Optional[TelegramBot] = None
+        self._cancelar_processamento = False
 
         # Datas padrao (hoje)
         hoje = datetime.now().strftime("%d/%m/%Y")
@@ -98,6 +129,9 @@ class AppAutomacao:
         self._carregar_credenciais()
         self._criar_interface()
 
+        # Inicia Telegram Bot se configurado
+        self._iniciar_telegram_bot()
+
     def _carregar_credenciais(self):
         if config.carregar():
             self.nexlog_user.set(config.nexlog.usuario)
@@ -106,6 +140,9 @@ class AppAutomacao:
             self.sefaz_user.set(config.sefaz.usuario)
             self.sefaz_senha.set(config.sefaz.senha)
             self.timeout_var.set(config.timeout_padrao)
+            self.tg_token.set(config.telegram.bot_token)
+            self.tg_chat_id.set(config.telegram.chat_id)
+            self.tg_ativo.set(config.telegram.ativo)
 
     def _salvar_credenciais(self):
         config.nexlog.usuario = self.nexlog_user.get()
@@ -114,6 +151,9 @@ class AppAutomacao:
         config.sefaz.usuario = self.sefaz_user.get()
         config.sefaz.senha = self.sefaz_senha.get()
         config.timeout_padrao = self.timeout_var.get()
+        config.telegram.bot_token = self.tg_token.get()
+        config.telegram.chat_id = self.tg_chat_id.get()
+        config.telegram.ativo = self.tg_ativo.get()
         config.salvar()
 
     def _criar_interface(self):
@@ -145,7 +185,7 @@ class AppAutomacao:
         self._criar_aba_log(self.tabview.tab("Log"))
 
     def _criar_aba_voos(self, parent):
-        """Aba principal com busca de voos e checkboxes."""
+        """Aba principal com busca de voos, checkboxes e painel de progresso."""
         # --- Barra de busca ---
         frame_busca = ctk.CTkFrame(parent, corner_radius=8)
         frame_busca.pack(fill="x", padx=8, pady=(8, 4))
@@ -201,12 +241,18 @@ class AppAutomacao:
                       width=100, height=32,
                       font=ctk.CTkFont(size=12, weight="bold")).pack(side="left")
 
-        # --- Lista de voos com checkboxes ---
-        frame_lista = ctk.CTkFrame(parent, fg_color="transparent")
-        frame_lista.pack(fill="both", expand=True, padx=8, pady=4)
+        # ============================================================
+        # CONTAINER CENTRAL: alterna entre lista de voos e progresso
+        # ============================================================
+        self._container_central = ctk.CTkFrame(parent, fg_color="transparent")
+        self._container_central.pack(fill="both", expand=True, padx=8, pady=4)
+
+        # --- PAINEL 1: Lista de voos (checkboxes) ---
+        self._painel_lista = ctk.CTkFrame(self._container_central, fg_color="transparent")
+        self._painel_lista.pack(fill="both", expand=True)
 
         # Header da lista
-        frame_lista_header = ctk.CTkFrame(frame_lista, fg_color="transparent")
+        frame_lista_header = ctk.CTkFrame(self._painel_lista, fg_color="transparent")
         frame_lista_header.pack(fill="x", pady=(0, 4))
 
         self.lbl_voos_count = ctk.CTkLabel(frame_lista_header,
@@ -229,9 +275,56 @@ class AppAutomacao:
                       text_color="#6b7280",
                       font=ctk.CTkFont(size=11)).pack(side="right", padx=(0, 8))
 
-        # Scrollable frame para os voos (substitui Canvas+Scrollbar)
-        self.frame_voos_scroll = ctk.CTkScrollableFrame(frame_lista, corner_radius=6)
+        # Scrollable frame para os voos
+        self.frame_voos_scroll = ctk.CTkScrollableFrame(self._painel_lista, corner_radius=6)
         self.frame_voos_scroll.pack(fill="both", expand=True, pady=4)
+
+        # --- PAINEL 2: Progresso (oculto ate iniciar processamento) ---
+        self._painel_progresso = ctk.CTkFrame(self._container_central, fg_color="transparent")
+        # Nao faz pack — so aparece quando inicia processamento
+
+        # Header do progresso
+        frame_progresso_header = ctk.CTkFrame(self._painel_progresso, fg_color="transparent")
+        frame_progresso_header.pack(fill="x", pady=(0, 8))
+
+        self.lbl_progresso_titulo = ctk.CTkLabel(
+            frame_progresso_header, text="Processando...",
+            font=ctk.CTkFont(size=14, weight="bold"))
+        self.lbl_progresso_titulo.pack(side="left")
+
+        self.lbl_etapa_global = ctk.CTkLabel(
+            frame_progresso_header, text="",
+            font=ctk.CTkFont(size=11),
+            text_color="#60a5fa")
+        self.lbl_etapa_global.pack(side="right")
+
+        # Barra de progresso geral
+        self.progress_bar = ctk.CTkProgressBar(self._painel_progresso, height=6,
+                                                corner_radius=3)
+        self.progress_bar.pack(fill="x", pady=(0, 12))
+        self.progress_bar.set(0)
+
+        # Label de porcentagem
+        self.lbl_progresso_pct = ctk.CTkLabel(
+            self._painel_progresso, text="0%",
+            font=ctk.CTkFont(size=11),
+            text_color="#6b7280")
+        self.lbl_progresso_pct.pack(anchor="e", pady=(0, 8))
+
+        # Scrollable frame para os status dos voos
+        self.frame_progresso_scroll = ctk.CTkScrollableFrame(
+            self._painel_progresso, corner_radius=6)
+        self.frame_progresso_scroll.pack(fill="both", expand=True, pady=4)
+
+        # Botao voltar (aparece quando termina)
+        self.btn_voltar_lista = ctk.CTkButton(
+            self._painel_progresso, text="VOLTAR PARA LISTA",
+            command=self._mostrar_lista_voos,
+            width=180, height=36,
+            fg_color="transparent", border_width=1,
+            text_color="#60a5fa",
+            font=ctk.CTkFont(size=12, weight="bold"))
+        # Nao faz pack — so aparece quando processamento termina
 
         # --- Botao Iniciar ---
         frame_bottom = ctk.CTkFrame(parent, fg_color="transparent")
@@ -245,6 +338,159 @@ class AppAutomacao:
             text_color="#000000",
             font=ctk.CTkFont(size=13, weight="bold"))
         self.btn_iniciar.pack(side="right")
+
+    # ========= PROGRESSO: MOSTRAR/OCULTAR =========
+
+    def _mostrar_progresso(self, voos: List[Voo]):
+        """Troca o painel da aba Voos para exibir progresso em tempo real."""
+        # Oculta a lista de voos
+        self._painel_lista.pack_forget()
+
+        # Mostra o painel de progresso
+        self._painel_progresso.pack(fill="both", expand=True)
+
+        # Desabilita botao iniciar
+        self.btn_iniciar.configure(state="disabled", text="PROCESSANDO...")
+
+        # Limpa itens anteriores
+        for widget in self.frame_progresso_scroll.winfo_children():
+            widget.destroy()
+        self._progresso_widgets.clear()
+        self._progresso_voos.clear()
+
+        # Oculta botao voltar enquanto processa
+        self.btn_voltar_lista.pack_forget()
+
+        # Reseta barra
+        self.progress_bar.set(0)
+        self.lbl_progresso_pct.configure(text="0%")
+        self.lbl_progresso_titulo.configure(text=f"Processando {len(voos)} voo(s)...")
+        self.lbl_etapa_global.configure(text="Iniciando...")
+
+        # Cria cards de status para cada voo
+        for i, voo in enumerate(voos):
+            self._progresso_voos[i] = {
+                "status": StatusVoo.PENDENTE,
+                "etapa": "",
+                "msg": "Aguardando...",
+            }
+
+            row = ctk.CTkFrame(self.frame_progresso_scroll, corner_radius=6)
+            row.pack(fill="x", pady=3, padx=2)
+
+            inner_row = ctk.CTkFrame(row, fg_color="transparent")
+            inner_row.pack(fill="x", padx=12, pady=8)
+
+            # Icone de status (pendente = relogio)
+            icon_lbl = ctk.CTkLabel(inner_row, text="\u23f3",
+                                    font=ctk.CTkFont(size=16),
+                                    width=24)
+            icon_lbl.pack(side="left")
+
+            # Nome do voo
+            ctk.CTkLabel(inner_row, text=voo.numero_controle,
+                         font=ctk.CTkFont(size=12, weight="bold")
+                         ).pack(side="left", padx=(8, 0))
+
+            ctk.CTkLabel(inner_row, text=voo.etapas,
+                         font=ctk.CTkFont(size=11),
+                         text_color="#60a5fa").pack(side="left", padx=(12, 0))
+
+            # Etapa atual do voo (direita)
+            etapa_lbl = ctk.CTkLabel(inner_row, text="Aguardando...",
+                                     font=ctk.CTkFont(size=10),
+                                     text_color="#6b7280")
+            etapa_lbl.pack(side="right")
+
+            # Mensagem de resultado (abaixo, aparece apos concluir)
+            msg_lbl = ctk.CTkLabel(row, text="",
+                                   font=ctk.CTkFont(size=10),
+                                   text_color="#6b7280")
+            msg_lbl.pack(anchor="w", padx=56, pady=(0, 4))
+
+            self._progresso_widgets[i] = {
+                "icon": icon_lbl,
+                "etapa": etapa_lbl,
+                "msg": msg_lbl,
+                "frame": row,
+            }
+
+    def _mostrar_lista_voos(self):
+        """Volta para a lista de voos (checkboxes)."""
+        self._painel_progresso.pack_forget()
+        self._painel_lista.pack(fill="both", expand=True)
+        self.btn_iniciar.configure(state="normal", text="INICIAR PROCESSAMENTO")
+
+    def _atualizar_progresso_voo(self, indice: int, status: str, etapa: str = "", msg: str = ""):
+        """Atualiza o status visual de um voo no painel de progresso (thread-safe)."""
+        def _update():
+            if indice not in self._progresso_widgets:
+                return
+
+            widgets = self._progresso_widgets[indice]
+
+            # Atualiza icone
+            if status == StatusVoo.PROCESSANDO:
+                widgets["icon"].configure(text="\u23f3", text_color="#f59e0b")  # Relogio amarelo
+            elif status == StatusVoo.CONCLUIDO:
+                widgets["icon"].configure(text="\u2713", text_color="#22c55e")  # Check verde
+            elif status == StatusVoo.ERRO:
+                widgets["icon"].configure(text="\u2717", text_color="#ef4444")  # X vermelho
+            else:
+                widgets["icon"].configure(text="\u23f3", text_color="#6b7280")  # Pendente cinza
+
+            # Atualiza etapa
+            if etapa:
+                widgets["etapa"].configure(text=etapa)
+
+            # Atualiza mensagem de resultado
+            if msg:
+                widgets["msg"].configure(text=msg)
+
+            # Cor do frame baseada no status
+            if status == StatusVoo.PROCESSANDO:
+                widgets["frame"].configure(border_width=1, border_color="#f59e0b")
+            elif status == StatusVoo.CONCLUIDO:
+                widgets["frame"].configure(border_width=1, border_color="#22c55e")
+            elif status == StatusVoo.ERRO:
+                widgets["frame"].configure(border_width=1, border_color="#ef4444")
+            else:
+                widgets["frame"].configure(border_width=0)
+
+        self.janela.after(0, _update)
+
+    def _atualizar_barra_progresso(self, voo_atual: int, total_voos: int, etapa_texto: str = ""):
+        """Atualiza barra de progresso geral e etapa global (thread-safe)."""
+        def _update():
+            progresso = voo_atual / total_voos if total_voos > 0 else 0
+            self.progress_bar.set(progresso)
+            pct = int(progresso * 100)
+            self.lbl_progresso_pct.configure(text=f"{pct}%")
+
+            if etapa_texto:
+                self.lbl_etapa_global.configure(text=etapa_texto)
+
+        self.janela.after(0, _update)
+
+    def _finalizar_progresso(self, sucesso: bool = True):
+        """Marca o processamento como finalizado e mostra botao de voltar."""
+        def _update():
+            if sucesso:
+                self.lbl_progresso_titulo.configure(text="Processamento concluido!")
+                self.lbl_etapa_global.configure(text="")
+            else:
+                self.lbl_progresso_titulo.configure(text="Processamento com erros")
+
+            self.progress_bar.set(1.0)
+            self.lbl_progresso_pct.configure(text="100%")
+
+            # Mostra botao voltar
+            self.btn_voltar_lista.pack(pady=(12, 0))
+
+            # Reabilita botao iniciar
+            self.btn_iniciar.configure(state="normal", text="INICIAR PROCESSAMENTO")
+
+        self.janela.after(0, _update)
 
     def _criar_aba_credenciais(self, parent):
         """Aba de configuracao / credenciais."""
@@ -266,11 +512,31 @@ class AppAutomacao:
         self._section_label(frame, "GERAL", 9)
         self._field(frame, "Timeout (s):", self.timeout_var, 10, width=100)
 
+        # Telegram
+        self._section_label(frame, "TELEGRAM BOT", 12)
+        self._field(frame, "Token:", self.tg_token, 13, width=320)
+        self._field(frame, "Chat ID:", self.tg_chat_id, 14, width=180)
+
+        # Checkbox ativo + botao testar
+        frame_tg = ctk.CTkFrame(frame, fg_color="transparent")
+        frame_tg.grid(row=15, column=0, columnspan=2, sticky="w", pady=6)
+
+        ctk.CTkCheckBox(frame_tg, variable=self.tg_ativo,
+                        text="Notificacoes ativas",
+                        font=ctk.CTkFont(size=11)).pack(side="left")
+
+        ctk.CTkButton(frame_tg, text="Testar",
+                      command=self._testar_telegram,
+                      width=80, height=26,
+                      fg_color="transparent", border_width=1,
+                      text_color="#60a5fa",
+                      font=ctk.CTkFont(size=11)).pack(side="left", padx=(16, 0))
+
         # Salvar
         ctk.CTkButton(frame, text="SALVAR", command=self._salvar_e_confirmar,
                       width=140, height=36,
                       font=ctk.CTkFont(size=12, weight="bold")
-                      ).grid(row=12, column=0, columnspan=2, pady=25)
+                      ).grid(row=17, column=0, columnspan=2, pady=25)
 
     def _section_label(self, frame, text, row):
         ctk.CTkLabel(frame, text=text,
@@ -292,6 +558,84 @@ class AppAutomacao:
     def _salvar_e_confirmar(self):
         self._salvar_credenciais()
         self._log("Credenciais salvas!")
+        # Reinicia o bot Telegram se configurado
+        self._iniciar_telegram_bot()
+
+    def _testar_telegram(self):
+        """Testa conexao com o bot Telegram."""
+        self._salvar_credenciais()
+        bot = TelegramBot(self.tg_token.get(), self.tg_chat_id.get())
+        if not bot.configurado:
+            messagebox.showwarning("Telegram", "Preencha Token e Chat ID.")
+            return
+        if bot.testar_conexao():
+            bot.notificar("\u2705 *AERO Bot conectado!*\nNotificacoes configuradas com sucesso.")
+            messagebox.showinfo("Telegram", "Conexao OK! Mensagem de teste enviada.")
+        else:
+            messagebox.showerror("Telegram", "Falha na conexao. Verifique o token.")
+
+    def _iniciar_telegram_bot(self):
+        """Inicia ou reinicia o bot Telegram se configurado e ativo."""
+        # Para bot anterior se existia
+        if hasattr(self, '_telegram_bot') and self._telegram_bot:
+            self._telegram_bot.parar()
+            self._telegram_bot = None
+
+        if not self.tg_ativo.get():
+            return
+
+        token = self.tg_token.get().strip()
+        chat_id = self.tg_chat_id.get().strip()
+
+        if not token or not chat_id:
+            return
+
+        self._telegram_bot = TelegramBot(token, chat_id)
+
+        # Registra callbacks para comandos remotos
+        self._telegram_bot.registrar_callbacks(
+            cb_iniciar=self._telegram_cmd_iniciar,
+            cb_parar=self._telegram_cmd_parar,
+            cb_status=self._telegram_cmd_status,
+            cb_voos=self._telegram_cmd_voos,
+        )
+
+        self._telegram_bot.iniciar()
+        self._log("Telegram Bot iniciado!")
+
+    def _telegram_cmd_iniciar(self):
+        """Callback do Telegram /iniciar — dispara processamento."""
+        if self._processando:
+            return
+        # Agenda no main thread
+        self.janela.after(0, self._iniciar_processamento_thread)
+
+    def _telegram_cmd_parar(self):
+        """Callback do Telegram /parar — seta flag de cancelamento."""
+        self._cancelar_processamento = True
+
+    def _telegram_cmd_status(self) -> str:
+        """Callback do Telegram /status."""
+        if self._processando:
+            return "\u23f3 *Processamento em andamento*"
+        elif self._voos_encontrados:
+            return (
+                f"\U0001f4a4 *Idle*\n"
+                f"Voos na memoria: {len(self._voos_encontrados)}\n"
+                f"Ultimo status: pronto para processar"
+            )
+        else:
+            return "\U0001f4a4 *Idle* - Nenhum voo buscado."
+
+    def _telegram_cmd_voos(self) -> str:
+        """Callback do Telegram /voos."""
+        if not self._voos_encontrados:
+            return "\u2139\ufe0f Nenhum voo encontrado. Busque na interface primeiro."
+
+        linhas = [f"\u2708\ufe0f *Voos ({len(self._voos_encontrados)}):*\n"]
+        for v in self._voos_encontrados[:15]:
+            linhas.append(f"  - {v.numero_controle} ({v.etapas}) {v.data_chegada}")
+        return "\n".join(linhas)
 
     def _criar_aba_log(self, parent):
         self.log_widget = scrolledtext.ScrolledText(
@@ -465,16 +809,32 @@ class AppAutomacao:
         threading.Thread(target=self._processar_voos, daemon=True).start()
 
     def _processar_voos(self):
-        """Processamento completo dos voos selecionados."""
+        """Processamento completo dos voos selecionados com progresso visual."""
         self._salvar_credenciais()
         self._processando = True
+        self._cancelar_processamento = False
 
         # Usa apenas os voos marcados via checkbox
         voos = self._obter_voos_selecionados()
 
+        # Mostra painel de progresso na mesma aba (substitui lista)
+        self.janela.after(0, lambda: self._mostrar_progresso(voos))
+        time.sleep(0.3)  # Aguarda UI atualizar
+
         self._log("=" * 60)
         self._log(f"INICIANDO PROCESSAMENTO DE {len(voos)} VOOS")
         self._log("=" * 60)
+
+        # Notificacao Telegram: inicio
+        if self._telegram_bot and self._telegram_bot.configurado:
+            nomes = [f"{v.numero_controle} ({v.etapas})" for v in voos]
+            self._telegram_bot.notificar_inicio(len(voos), nomes)
+
+        teve_erro = False
+        total_liberados = 0
+        total_retidos = 0
+        voos_sucesso = 0
+        voos_erro = 0
 
         try:
             # Inicia navegador
@@ -491,17 +851,71 @@ class AppAutomacao:
 
             # Processa cada voo
             for i, voo in enumerate(voos):
+                # Verifica cancelamento remoto (Telegram /parar)
+                if self._cancelar_processamento:
+                    self._log("PROCESSAMENTO CANCELADO pelo usuario!")
+                    self._atualizar_progresso_voo(i, StatusVoo.ERRO, "Cancelado")
+                    break
+
                 self._log(f"\n{'='*40}")
                 self._log(f"VOO {i+1}/{len(voos)}: {voo.numero_controle} ({voo.etapas})")
                 self._log(f"{'='*40}")
 
+                # Atualiza progresso global
+                self._atualizar_barra_progresso(
+                    i, len(voos),
+                    f"Voo {i+1}/{len(voos)}: {voo.numero_controle}"
+                )
+
+                # Marca voo como processando
+                self._atualizar_progresso_voo(i, StatusVoo.PROCESSANDO, "Iniciando...")
+
                 try:
                     resultado = self._processar_um_voo(
-                        voo, browser, voos_mod, cte_mod, liberar_mod, outlook, sefaz
+                        voo, browser, voos_mod, cte_mod, liberar_mod, outlook, sefaz,
+                        indice_progresso=i
                     )
                     self._log(resultado.resumo())
+
+                    # Marca voo como concluido ou com erro
+                    if resultado.sucesso:
+                        resumo_curto = (
+                            f"{len(resultado.awbs_liberados)} liberados"
+                            f"{f', {len(resultado.awbs_retidos)} retidos' if resultado.awbs_retidos else ''}"
+                        )
+                        self._atualizar_progresso_voo(
+                            i, StatusVoo.CONCLUIDO, "Concluido", resumo_curto)
+                        voos_sucesso += 1
+                        total_liberados += len(resultado.awbs_liberados)
+                        total_retidos += len(resultado.awbs_retidos)
+
+                        # Telegram: voo concluido
+                        if self._telegram_bot and self._telegram_bot.configurado:
+                            self._telegram_bot.notificar_voo_concluido(
+                                i + 1, len(voos), voo.numero_controle,
+                                len(resultado.awbs_liberados), len(resultado.awbs_retidos))
+                    else:
+                        self._atualizar_progresso_voo(
+                            i, StatusVoo.ERRO, "Erro",
+                            resultado.erros[0] if resultado.erros else "Erro desconhecido")
+                        teve_erro = True
+                        voos_erro += 1
+
+                        # Telegram: voo com erro
+                        if self._telegram_bot and self._telegram_bot.configurado:
+                            self._telegram_bot.notificar_voo_erro(
+                                i + 1, len(voos), voo.numero_controle,
+                                resultado.erros[0] if resultado.erros else "Erro desconhecido")
+
                 except Exception as e:
                     self._log(f"ERRO no voo {voo.numero_controle}: {e}")
+                    self._atualizar_progresso_voo(i, StatusVoo.ERRO, "Erro", str(e)[:60])
+                    teve_erro = True
+                    voos_erro += 1
+
+                    if self._telegram_bot and self._telegram_bot.configurado:
+                        self._telegram_bot.notificar_voo_erro(
+                            i + 1, len(voos), voo.numero_controle, str(e)[:100])
 
                 self._log("")
 
@@ -510,21 +924,43 @@ class AppAutomacao:
             sefaz.fechar_aba()
             browser.fechar()
 
+            # Barra 100%
+            self._atualizar_barra_progresso(len(voos), len(voos), "Concluido!")
+
             self._log("=" * 60)
             self._log("PROCESSAMENTO CONCLUIDO!")
             self._log("=" * 60)
+
+            self._finalizar_progresso(sucesso=not teve_erro)
+
+            # Telegram: fim do processamento
+            if self._telegram_bot and self._telegram_bot.configurado:
+                self._telegram_bot.notificar_fim(
+                    len(voos), voos_sucesso, voos_erro,
+                    total_liberados, total_retidos)
 
             messagebox.showinfo("Concluido", "Processamento finalizado!")
 
         except Exception as e:
             self._log(f"ERRO CRITICO: {e}")
+            self._finalizar_progresso(sucesso=False)
+
+            # Telegram: erro critico
+            if self._telegram_bot and self._telegram_bot.configurado:
+                self._telegram_bot.notificar_erro_critico(str(e))
+
             messagebox.showerror("Erro", str(e))
         finally:
             self._processando = False
 
-    def _processar_um_voo(self, voo: Voo, browser, voos_mod, cte_mod, liberar_mod, outlook, sefaz) -> ResultadoProcessamento:
-        """Processa um unico voo completo."""
+    def _processar_um_voo(self, voo: Voo, browser, voos_mod, cte_mod, liberar_mod, outlook, sefaz, indice_progresso: int = -1) -> ResultadoProcessamento:
+        """Processa um unico voo completo com atualizacao de progresso."""
         resultado = ResultadoProcessamento(voo=voo)
+
+        def _prog(etapa: str):
+            """Helper para atualizar progresso do voo atual."""
+            if indice_progresso >= 0:
+                self._atualizar_progresso_voo(indice_progresso, StatusVoo.PROCESSANDO, etapa)
 
         # Pega datas
         if HAS_CALENDAR:
@@ -535,6 +971,7 @@ class AppAutomacao:
             data_fim = self.data_final.get().strip()
 
         # --- ETAPA 1: Buscar chave MDF-e ---
+        _prog("1/6 Chave MDF-e")
         self._log("  [1/6] Buscando chave MDF-e...")
         browser.navegar_operacoes_gerenciar_rotas()
         voos_mod.pesquisar_voos(data_ini, data_fim)
@@ -549,6 +986,7 @@ class AppAutomacao:
         self._log(f"  Chave: {chave[:20]}...")
 
         # --- ETAPA 2: Baixar manifesto (RETIRA/ENTREGA) ---
+        _prog("2/6 Manifesto")
         self._log("  [2/6] Baixando manifesto...")
         # Garante que estamos na pagina de Operacoes > Gerenciar Rotas com a tabela visivel
         # (a etapa 1 pode ter aberto/fechado modais que prejudicam a tabela)
@@ -564,6 +1002,7 @@ class AppAutomacao:
             self._log("  AVISO: Nao conseguiu baixar manifesto")
 
         # --- ETAPA 3: Verificar Outlook (tenta primeiro) ---
+        _prog("3/6 Outlook")
         self._log("  [3/6] Verificando Outlook...")
         consulta = None
         resposta = RespostaEmail.INDEFINIDO
@@ -604,6 +1043,7 @@ class AppAutomacao:
 
         # --- ETAPA 4: Consultar site SEFAZ (se Outlook nao resolveu) ---
         if not usou_outlook and consulta is None and resposta != RespostaEmail.SEM_TERMOS:
+            _prog("4/6 Site SEFAZ")
             self._log("  [4/6] Consultando site SEFAZ...")
             try:
                 sefaz.abrir_sefaz()
@@ -649,12 +1089,14 @@ class AppAutomacao:
                 except Exception:
                     pass
         else:
+            _prog("4/6 Outlook resolveu")
             self._log("  [4/6] Outlook resolveu - pulando site SEFAZ")
 
         # --- ETAPA 5: Adicionar comentarios nos CTes retidos ---
         mapa_cte_awb = {}  # Mapeamento CTe -> AWB (usado na etapa 6 para filtrar)
 
         if consulta and consulta.termos:
+            _prog("5/6 Comentarios")
             self._log(f"  [5/6] Adicionando comentarios ({len(consulta.ctes_retidos)} CTes)...")
 
             for cte in set(consulta.ctes_retidos):
@@ -682,14 +1124,17 @@ class AppAutomacao:
 
             self._log(f"  Comentarios: {resultado.comentarios_adicionados} OK / {resultado.comentarios_falha} falhas")
         else:
+            _prog("5/6 Sem termos")
             self._log("  [5/6] Sem termos para comentar")
 
         # --- ETAPA 6: Liberar AWBs ---
+        _prog("6/6 Liberando")
         self._log("  [6/6] Liberando AWBs...")
 
         # Calcula quais AWBs liberar
         awbs_para_liberar = set()
         awbs_com_termo = set()
+        awbs_meli = set()  # AWBs com servico MELI/Meli Belly (nao libera)
 
         if manifesto:
             if resposta == RespostaEmail.SEM_TERMOS:
@@ -719,6 +1164,23 @@ class AppAutomacao:
                 awbs_para_liberar = manifesto.awbs_retira.copy()
 
             resultado.awbs_domicilio = list(manifesto.awbs_entrega)
+
+            # FILTRO MELI: Verifica servico dos AWBs que seriam liberados
+            # AWBs com servico MELI/Meli Belly NAO devem ser liberados
+            if awbs_para_liberar:
+                for awb in list(awbs_para_liberar):
+                    try:
+                        servico = cte_mod.verificar_servico_awb(awb)
+                        if servico and "MELI" in servico.upper():
+                            awbs_meli.add(awb)
+                            self._log(f"    AWB {awb}: servico MELI - NAO libera")
+                    except Exception:
+                        pass  # Se falhar a verificacao, libera normalmente
+
+                if awbs_meli:
+                    awbs_para_liberar -= awbs_meli
+                    self._log(f"  {len(awbs_meli)} AWB(s) MELI removido(s) da liberacao")
+
         else:
             self._log("  AVISO: Sem manifesto - nao pode liberar")
 

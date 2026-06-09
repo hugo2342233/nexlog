@@ -34,9 +34,17 @@ class CredenciaisSefaz:
 
 
 @dataclass
+class ConfigTelegram:
+    bot_token: str = ""        # Token do BotFather (@BotFather no Telegram)
+    chat_id: str = ""          # ID do chat/grupo para notificacoes
+    ativo: bool = False        # Liga/desliga notificacoes
+
+
+@dataclass
 class Config:
     nexlog: CredenciaisNexlog = field(default_factory=CredenciaisNexlog)
     sefaz: CredenciaisSefaz = field(default_factory=CredenciaisSefaz)
+    telegram: ConfigTelegram = field(default_factory=ConfigTelegram)
 
     # URLs
     url_nexlog: str = "https://golcargo.nexlog.com/account/#/login"
@@ -63,6 +71,11 @@ class Config:
                 "usuario": self.sefaz.usuario,
                 "senha": self.sefaz.senha,
             },
+            "telegram": {
+                "bot_token": self.telegram.bot_token,
+                "chat_id": self.telegram.chat_id,
+                "ativo": self.telegram.ativo,
+            },
             "timeout_padrao": self.timeout_padrao,
         }
         with open(ARQUIVO_CREDENCIAIS, "w", encoding="utf-8") as f:
@@ -77,6 +90,9 @@ class Config:
                 dados = json.load(f)
             self.nexlog = CredenciaisNexlog(**dados.get("nexlog", {}))
             self.sefaz = CredenciaisSefaz(**dados.get("sefaz", {}))
+            tg = dados.get("telegram", {})
+            if tg:
+                self.telegram = ConfigTelegram(**tg)
             self.timeout_padrao = dados.get("timeout_padrao", 20)
             return True
         except (json.JSONDecodeError, TypeError):
