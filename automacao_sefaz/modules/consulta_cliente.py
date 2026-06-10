@@ -526,15 +526,13 @@ class ConsultaCliente:
         """
         Abre os comentarios do AWB e le TODOS os textos (inclusive truncados).
         
-        Fluxo real:
-        1. Clica "Adicionar comentarios" -> abre popup com tabela de comentarios
-        2. Le o texto de CADA linha da tabela de comentarios
-        3. Se algum esta truncado (termina com "..."), clica na LUPA daquela
-           linha -> abre OUTRO popup com texto completo -> le -> fecha
+        Fluxo real no Nexlog:
+        1. Clica "Adicionar comentarios" -> abre popup com tabela id="RemarksList"
+        2. Le o texto de CADA linha da tabela
+        3. Se texto truncado ("..."), clica na LUPA (a.viewRemark > i.fal.fa-search)
+           -> abre popup "Descricao do comentario" -> le texto completo -> fecha
         4. Junta textos de todos os comentarios
         5. Fecha popup de comentarios
-        
-        Retorna texto concatenado de TODOS os comentarios.
         """
         texto_total = ""
 
@@ -550,12 +548,11 @@ class ConsultaCliente:
             except Exception:
                 return ""
 
-            # Le textos da tabela de comentarios
-            # A tabela tem colunas: Comentario | Data | Usuario | Critico? | (lupa)
+            # Le textos da tabela de comentarios (id="RemarksList")
             try:
                 linhas_comentario = self.driver.find_elements(By.XPATH,
-                    "//table[contains(.,'Coment')]//tbody//tr"
-                    " | //table//tbody//tr[.//td]"
+                    "//table[@id='RemarksList']//tbody//tr"
+                    " | //table[contains(@class,'dataTable')]//tbody//tr"
                 )
 
                 for linha in linhas_comentario:
@@ -566,12 +563,13 @@ class ConsultaCliente:
 
                         # Primeira coluna = texto do comentario
                         texto_col = colunas[0].text.strip()
-                        
-                        # Verifica se esta truncado (termina com "..." ou tem "…")
-                        truncado = texto_col.endswith("...") or texto_col.endswith("\u2026") or "..." in texto_col
 
-                        if truncado and len(colunas) > 1:
-                            # Tenta clicar na LUPA desta linha para ver completo
+                        # Verifica se esta truncado
+                        truncado = ("..." in texto_col or "\u2026" in texto_col
+                                    or texto_col.endswith(","))
+
+                        if truncado:
+                            # Clica na lupa (a.viewRemark) desta linha
                             texto_completo = self._clicar_lupa_comentario(linha)
                             if texto_completo:
                                 texto_total += texto_completo + "\n"
@@ -606,14 +604,17 @@ class ConsultaCliente:
 
     def _clicar_lupa_comentario(self, linha_tr) -> str:
         """
-        Clica na lupa de uma linha da tabela de comentarios para ver texto completo.
-        Abre outro popup, le o texto, fecha e retorna.
+        Clica na lupa (a.viewRemark > i.fal.fa-search) de uma linha
+        da tabela de comentarios para ver o texto completo.
+        
+        Abre popup "Descricao do comentario" -> le texto -> fecha -> retorna.
         """
         try:
-            # Busca a lupa/icone na ultima coluna da linha
+            # Busca o link a.viewRemark dentro da linha
             lupa = linha_tr.find_element(By.XPATH,
-                ".//a[.//i] | .//button[.//i] | .//i[contains(@class,'fa')]/ancestor::a"
-                " | .//td[last()]//a | .//td[last()]//button"
+                ".//a[contains(@class,'viewRemark')]"
+                " | .//a[.//i[contains(@class,'fa-search')]]"
+                " | .//td[last()]//a"
             )
 
             if not lupa.is_displayed():
@@ -622,22 +623,19 @@ class ConsultaCliente:
             lupa.click()
             time.sleep(3)
 
-            # Le o texto do popup que abriu (pode ser modal ou alert)
+            # Le o texto do popup "Descricao do comentario"
             texto = ""
             try:
-                # Tenta ler do ultimo modal aberto (o mais ao frente)
-                modais = self.driver.find_elements(By.XPATH,
-                    "//div[contains(@class,'modal')][contains(@style,'display: block')]"
+                # O popup aparece como o modal mais ao frente
+                popup = self.driver.find_element(By.XPATH,
+                    "(//div[contains(@class,'modal')][contains(@style,'display: block')])[last()]"
                 )
-                if modais:
-                    # Pega o ultimo (mais recente/superior)
-                    texto = modais[-1].text
+                texto = popup.text
             except Exception:
                 texto = self.driver.find_element(By.TAG_NAME, "body").text
 
-            # Fecha este popup (botao Fechar ou X do popup da lupa)
+            # Fecha o popup da descricao (botao Fechar mais ao frente)
             try:
-                # Busca o botao Fechar mais ao frente (do popup da lupa)
                 botoes_fechar = self.driver.find_elements(By.XPATH,
                     "//button[contains(.,'Fechar')]"
                 )
