@@ -440,9 +440,14 @@ class ConsultaCliente:
         """
         Verifica nos comentarios do AWB se tem termo SEFAZ.
         
-        Na tela de rastreio tem o link "Adicionar comentarios" no canto.
-        Ao clicar, abre os comentarios existentes.
-        Alternativa: le o texto visivel do modal que pode ja conter comentarios.
+        Formatos de termos nos comentarios:
+        - "RETIDO PELA SEFAZ TA 2410845, TA 2410848"
+        - "TA 8378374, 8346763, 8373432, 9838778"  (virgulas sem repetir TA)
+        - "RETIDO TA 8388"
+        - "ta 2410845"
+        
+        Quando o comentario esta truncado (muitos termos), precisa clicar
+        na LUPA ao lado do comentario para ver o texto completo.
         """
         try:
             # Primeiro verifica se o texto do modal ja tem info de termo
@@ -456,56 +461,135 @@ class ConsultaCliente:
             except Exception:
                 return
 
-            # Verifica se ja tem mencion a termo no texto visivel
-            # Formatos possiveis:
-            #   "RETIDO PELA SEFAZ TA 2410845"
-            #   "TA 7828273"
-            #   "RETIDO TA 8388"
-            #   "ta 2410845, TA 2410848"
-            termos = re.findall(r'(?:TA|ta)\s*(\d{4,})', texto_modal)
+            # Tenta extrair termos do texto visivel
+            termos = self._extrair_numeros_termos(texto_modal)
             if termos:
                 resultado.tem_comentario_retido = True
-                resultado.termos = list(set(termos))
+                resultado.termos = termos
                 return
 
             # Se nao encontrou no texto visivel, tenta abrir comentarios
-            try:
-                link_comentarios = self.driver.find_element(By.XPATH,
-                    "//div[contains(@class,'modal')]//a[contains(.,'coment')]"
-                    " | //a[contains(.,'Adicionar coment')]"
-                )
-                link_comentarios.click()
-                time.sleep(3)
+            # Primeiro tenta clicar na LUPA, depois "Adicionar comentarios"
+            texto_comentarios = self._abrir_comentarios_completos()
 
-                # Le texto dos comentarios
-                texto_comentarios = self.driver.find_element(By.TAG_NAME, "body").text
-
-                if "RETIDO PELA SEFAZ" in texto_comentarios.upper():
+            if texto_comentarios:
+                termos = self._extrair_numeros_termos(texto_comentarios)
+                if termos:
                     resultado.tem_comentario_retido = True
-                    termos = re.findall(r'(?:TA|ta)\s*(\d{4,})', texto_comentarios)
-                    resultado.termos = list(set(termos))
-                else:
-                    # Tenta formato mais simples: so "TA" + numeros
-                    termos = re.findall(r'(?:TA|ta)\s*(\d{4,})', texto_comentarios)
-                    if termos:
-                        resultado.tem_comentario_retido = True
-                        resultado.termos = list(set(termos))
-
-                # Fecha popup de comentarios
-                try:
-                    btn_fechar = self.driver.find_element(By.XPATH,
-                        "(//button[contains(.,'Fechar')])[last()]"
-                    )
-                    btn_fechar.click()
-                    time.sleep(1)
-                except Exception:
-                    pass
-
-            except Exception:
-                pass  # Link de comentarios nao encontrado — OK
+                    resultado.termos = termos
 
         except Exception:
             pass
+
+    def _extrair_numeros_termos(self, texto: str) -> List[str]:
+        """
+        Extrai numeros de termos de um texto.
+        
+        Formatos aceitos:
+        - "TA 2410845" -> ["2410845"]
+        - "TA 2410845, TA 2410848" -> ["2410845", "2410848"]
+        - "ta 8378374, 8346763, 8373432" -> ["8378374", "8346763", "8373432"]
+        - "RETIDO PELA SEFAZ TA 2410845, 2410848, 2410851" -> todos
+        """
+        if not texto:
+            return []
+
+        termos = set()
+
+        # Estrategia 1: Pega todos "TA <numero>" explicitos
+        matches_ta = re.findall(r'(?:TA|ta)\s*(\d{4,})', texto)
+        termos.update(matches_ta)
+
+        # Estrategia 2: Pega numeros separados por virgula apos "TA"
+        # Ex: "TA 8378374, 8346763, 8373432, 9838778"
+        padrao_lista = re.findall(
+            r'(?:TA|ta|RETIDO[^,\n]*TA)\s*(\d{4,}(?:\s*,\s*\d{4,})*)',
+            texto, re.IGNORECASE
+        )
+        for match in padrao_lista:
+            numeros = re.findall(r'(\d{4,})', match)
+            termos.update(numeros)
+
+        # Estrategia 3: Se achou pelo menos 1 TA, busca todos numeros 7+ digitos
+        # nas linhas que contem "TA" ou "RETIDO"
+        if termos:
+            linhas = texto.split("\n")
+            for linha in linhas:
+                linha_upper = linha.upper()
+                if "TA" in linha_upper or "RETIDO" in linha_upper:
+                    numeros_linha = re.findall(r'\b(\d{5,})\b', linha)
+                    termos.update(numeros_linha)
+
+        return list(termos) if termos else []
+
+    def _abrir_comentarios_completos(self) -> str:
+        """
+        Abre os comentarios completos do AWB.
+        
+        Fluxo:
+        1. Tenta clicar na LUPA ao lado do comentario truncado
+        2. Se nao achar, clica em "Adicionar comentarios"
+        3. Le o texto completo
+        4. Fecha o popup/modal
+        """
+        texto = ""
+
+        try:
+            # Tenta clicar na LUPA (icone ao lado do comentario truncado)
+            lupa_encontrada = False
+            try:
+                lupas = self.driver.find_elements(By.XPATH,
+                    "//div[@id='modalContainer']//a[.//i[contains(@class,'search') "
+                    "or contains(@class,'eye')]]"
+                    " | //div[@id='modalContainer']//button[.//i[contains(@class,'search') "
+                    "or contains(@class,'eye')]]"
+                    " | //div[@id='modalContainer']//i[contains(@class,'fa-search') "
+                    "or contains(@class,'fa-eye')]/ancestor::a"
+                    " | //div[@id='modalContainer']//td//a[.//i]"
+                )
+                for lupa in lupas:
+                    try:
+                        if lupa.is_displayed():
+                            lupa.click()
+                            time.sleep(3)
+                            lupa_encontrada = True
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+            if not lupa_encontrada:
+                # Fallback: clica em "Adicionar comentarios"
+                try:
+                    link = self.driver.find_element(By.XPATH,
+                        "//div[contains(@class,'modal')]//a[contains(.,'coment')]"
+                        " | //a[contains(.,'Adicionar coment')]"
+                    )
+                    link.click()
+                    time.sleep(3)
+                except Exception:
+                    return ""
+
+            # Le o texto completo
+            texto = self.driver.find_element(By.TAG_NAME, "body").text
+
+            # Fecha o popup/modal de comentarios
+            try:
+                btn_fechar = self.driver.find_element(By.XPATH,
+                    "(//button[contains(.,'Fechar')])[last()]"
+                )
+                btn_fechar.click()
+                time.sleep(1)
+            except Exception:
+                from selenium.webdriver.common.action_chains import ActionChains
+                ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+                time.sleep(1)
+
+        except Exception:
+            pass
+
+        return texto
 
     def _classificar_status(self, resultado: ResultadoConsulta):
         """Classifica o status final baseado nos dados extraidos."""
