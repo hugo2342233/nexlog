@@ -57,6 +57,10 @@ def main():
     print(f"[DEBUG] termos: {resultado.termos}")
     print(f"[DEBUG] tem_comentario_retido: {resultado.tem_comentario_retido}")
     print(f"[DEBUG] observacao: {resultado.observacao}")
+    print(f"[DEBUG] tade_situacao: {resultado.tade_situacao}")
+    print(f"[DEBUG] tade_valor: {resultado.tade_valor}")
+    print(f"[DEBUG] tade_ta_path: {resultado.tade_ta_path}")
+    print(f"[DEBUG] tade_dar_path: {resultado.tade_dar_path}")
     print("-" * 40)
 
     # Fecha
