@@ -524,57 +524,70 @@ class ConsultaCliente:
 
     def _abrir_comentarios_completos(self) -> str:
         """
-        Abre os comentarios completos do AWB.
+        Abre os comentarios do AWB e le TODOS os textos (inclusive truncados).
         
-        Fluxo:
-        1. Tenta clicar na LUPA ao lado do comentario truncado
-        2. Se nao achar, clica em "Adicionar comentarios"
-        3. Le o texto completo
-        4. Fecha o popup/modal
+        Fluxo real:
+        1. Clica "Adicionar comentarios" -> abre popup com tabela de comentarios
+        2. Le o texto de CADA linha da tabela de comentarios
+        3. Se algum esta truncado (termina com "..."), clica na LUPA daquela
+           linha -> abre OUTRO popup com texto completo -> le -> fecha
+        4. Junta textos de todos os comentarios
+        5. Fecha popup de comentarios
+        
+        Retorna texto concatenado de TODOS os comentarios.
         """
-        texto = ""
+        texto_total = ""
 
         try:
-            # Tenta clicar na LUPA (icone ao lado do comentario truncado)
-            lupa_encontrada = False
+            # Abre popup de comentarios
             try:
-                lupas = self.driver.find_elements(By.XPATH,
-                    "//div[@id='modalContainer']//a[.//i[contains(@class,'search') "
-                    "or contains(@class,'eye')]]"
-                    " | //div[@id='modalContainer']//button[.//i[contains(@class,'search') "
-                    "or contains(@class,'eye')]]"
-                    " | //div[@id='modalContainer']//i[contains(@class,'fa-search') "
-                    "or contains(@class,'fa-eye')]/ancestor::a"
-                    " | //div[@id='modalContainer']//td//a[.//i]"
+                link = self.driver.find_element(By.XPATH,
+                    "//a[contains(.,'Adicionar coment')]"
+                    " | //div[@id='modalContainer']//a[contains(.,'coment')]"
                 )
-                for lupa in lupas:
+                link.click()
+                time.sleep(4)
+            except Exception:
+                return ""
+
+            # Le textos da tabela de comentarios
+            # A tabela tem colunas: Comentario | Data | Usuario | Critico? | (lupa)
+            try:
+                linhas_comentario = self.driver.find_elements(By.XPATH,
+                    "//table[contains(.,'Coment')]//tbody//tr"
+                    " | //table//tbody//tr[.//td]"
+                )
+
+                for linha in linhas_comentario:
                     try:
-                        if lupa.is_displayed():
-                            lupa.click()
-                            time.sleep(3)
-                            lupa_encontrada = True
-                            break
+                        colunas = linha.find_elements(By.TAG_NAME, "td")
+                        if not colunas:
+                            continue
+
+                        # Primeira coluna = texto do comentario
+                        texto_col = colunas[0].text.strip()
+                        
+                        # Verifica se esta truncado (termina com "..." ou tem "…")
+                        truncado = texto_col.endswith("...") or texto_col.endswith("\u2026") or "..." in texto_col
+
+                        if truncado and len(colunas) > 1:
+                            # Tenta clicar na LUPA desta linha para ver completo
+                            texto_completo = self._clicar_lupa_comentario(linha)
+                            if texto_completo:
+                                texto_total += texto_completo + "\n"
+                            else:
+                                texto_total += texto_col + "\n"
+                        else:
+                            texto_total += texto_col + "\n"
+
                     except Exception:
                         continue
+
             except Exception:
-                pass
+                # Fallback: le todo o texto visivel
+                texto_total = self.driver.find_element(By.TAG_NAME, "body").text
 
-            if not lupa_encontrada:
-                # Fallback: clica em "Adicionar comentarios"
-                try:
-                    link = self.driver.find_element(By.XPATH,
-                        "//div[contains(@class,'modal')]//a[contains(.,'coment')]"
-                        " | //a[contains(.,'Adicionar coment')]"
-                    )
-                    link.click()
-                    time.sleep(3)
-                except Exception:
-                    return ""
-
-            # Le o texto completo
-            texto = self.driver.find_element(By.TAG_NAME, "body").text
-
-            # Fecha o popup/modal de comentarios
+            # Fecha popup de comentarios (botao "Fechar")
             try:
                 btn_fechar = self.driver.find_element(By.XPATH,
                     "(//button[contains(.,'Fechar')])[last()]"
@@ -589,7 +602,57 @@ class ConsultaCliente:
         except Exception:
             pass
 
-        return texto
+        return texto_total
+
+    def _clicar_lupa_comentario(self, linha_tr) -> str:
+        """
+        Clica na lupa de uma linha da tabela de comentarios para ver texto completo.
+        Abre outro popup, le o texto, fecha e retorna.
+        """
+        try:
+            # Busca a lupa/icone na ultima coluna da linha
+            lupa = linha_tr.find_element(By.XPATH,
+                ".//a[.//i] | .//button[.//i] | .//i[contains(@class,'fa')]/ancestor::a"
+                " | .//td[last()]//a | .//td[last()]//button"
+            )
+
+            if not lupa.is_displayed():
+                return ""
+
+            lupa.click()
+            time.sleep(3)
+
+            # Le o texto do popup que abriu (pode ser modal ou alert)
+            texto = ""
+            try:
+                # Tenta ler do ultimo modal aberto (o mais ao frente)
+                modais = self.driver.find_elements(By.XPATH,
+                    "//div[contains(@class,'modal')][contains(@style,'display: block')]"
+                )
+                if modais:
+                    # Pega o ultimo (mais recente/superior)
+                    texto = modais[-1].text
+            except Exception:
+                texto = self.driver.find_element(By.TAG_NAME, "body").text
+
+            # Fecha este popup (botao Fechar ou X do popup da lupa)
+            try:
+                # Busca o botao Fechar mais ao frente (do popup da lupa)
+                botoes_fechar = self.driver.find_elements(By.XPATH,
+                    "//button[contains(.,'Fechar')]"
+                )
+                if botoes_fechar:
+                    botoes_fechar[-1].click()  # Ultimo = mais ao frente
+                    time.sleep(1)
+            except Exception:
+                from selenium.webdriver.common.action_chains import ActionChains
+                ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+                time.sleep(1)
+
+            return texto
+
+        except Exception:
+            return ""
 
     def _classificar_status(self, resultado: ResultadoConsulta):
         """Classifica o status final baseado nos dados extraidos."""
