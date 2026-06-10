@@ -268,14 +268,28 @@ class ConsultaCliente:
         """
         Extrai a ultima movimentacao da tabela de rastreio.
         
-        A tabela mostra etapas em ordem cronologica (1, 2, 3...).
-        Cada linha tem colunas: Etapa | Sigla | Acoes | Id.op | Local | Destino | Data | Obs | Resp | Ref
+        Estrutura das colunas (observada no Nexlog):
+        Col 0: + (expandir)
+        Col 1: Etapa (numero)
+        Col 2: Sigla (DOC, MAN, DEP, CIE, FDC, LOC, CRC - sigla da ACAO, NAO aeroporto)
+        Col 3: Acoes (texto da etapa: Embarque, Desembarque, etc.)
+        Col 4: Id. da operacao
+        Col 5: Local (aeroporto REAL: VCP, GRU, MCZ)
+        Col 6: Destino (aeroporto REAL: MCZ, GRU)
+        Col 7: Data da acao
+        Col 8: Observacoes
+        Col 9: Responsavel
+        Col 10: Referencia
+        Col 11: Acoes (icones)
+        
+        IMPORTANTE: A coluna 2 (Sigla) contem siglas de ACAO (DOC, MAN, DEP, CRC)
+        que tambem sao 3 letras maiusculas mas NAO sao aeroportos!
+        Por isso usamos os INDICES das colunas (pelo header) para pegar Local/Destino.
         
         Logica:
-        - Percorre TODAS as linhas e coleta Local/Destino de cada uma
-        - A ultima movimentacao REAL eh a ultima linha que tem Local DIFERENTE de Destino
-          (linhas com mesmo Local=Destino sao movimentacoes internas)
-        - Se nao encontrar, pega a ultima linha com qualquer Local/Destino
+        - Descobre indice de Local/Destino pelo header da tabela
+        - Pega apenas dessas colunas (ignora coluna Sigla)
+        - Ultima movimentacao = ultima linha onde Local != Destino
         """
         try:
             linhas = self.driver.find_elements(By.XPATH,
@@ -286,79 +300,82 @@ class ConsultaCliente:
             if not linhas:
                 return
 
+            # Descobre os indices das colunas pelo header da tabela
+            idx_local = -1
+            idx_destino = -1
+            idx_acoes = -1
+            idx_data = -1
+
+            try:
+                headers = self.driver.find_elements(By.XPATH,
+                    "//div[@id='modalContainer']//table//thead//th"
+                    " | //div[contains(@class,'modal')][contains(@style,'display: block')]//table//thead//th"
+                )
+                for i, th in enumerate(headers):
+                    texto_th = th.text.strip().lower()
+                    if texto_th == "local":
+                        idx_local = i
+                    elif texto_th == "destino":
+                        idx_destino = i
+                    elif "ações" in texto_th or "acoes" in texto_th or "ação" in texto_th:
+                        # Coluna "Ações" de texto (nome da etapa), nao a de icones
+                        if idx_acoes == -1:
+                            idx_acoes = i
+                    elif "data" in texto_th:
+                        idx_data = i
+            except Exception:
+                pass
+
+            # Fallback se nao encontrou pelo header
+            if idx_local == -1:
+                idx_local = 5
+            if idx_destino == -1:
+                idx_destino = 6
+            if idx_acoes == -1:
+                idx_acoes = 3
+            if idx_data == -1:
+                idx_data = 7
+
             # Coleta dados de TODAS as linhas
             ultima_movimentacao_real = None  # Local != Destino (ex: GRU > MCZ)
-            ultima_linha_qualquer = None     # Qualquer linha com dados
-            data_ultima = ""
+            ultima_linha_qualquer = None
 
             for linha in linhas:
                 try:
                     colunas = linha.find_elements(By.TAG_NAME, "td")
-                    if len(colunas) < 5:
+                    if len(colunas) <= max(idx_local, idx_destino):
                         continue
 
-                    texto_linha = linha.text.strip()
-                    if not texto_linha:
+                    # Extrai Local e Destino pelas posicoes CORRETAS da tabela
+                    local = colunas[idx_local].text.strip() if idx_local < len(colunas) else ""
+                    destino = colunas[idx_destino].text.strip() if idx_destino < len(colunas) else ""
+                    data_linha = colunas[idx_data].text.strip() if idx_data < len(colunas) else ""
+                    etapa_linha = colunas[idx_acoes].text.strip() if idx_acoes < len(colunas) else ""
+
+                    # Valida que sao siglas de aeroporto (3 letras maiusculas exatas)
+                    local_valido = bool(re.match(r'^[A-Z]{3}$', local))
+                    destino_valido = bool(re.match(r'^[A-Z]{3}$', destino))
+
+                    if not local_valido and not destino_valido:
                         continue
 
-                    # Extrai siglas de 3 letras (Local e Destino)
-                    siglas = []
-                    data_linha = ""
-                    etapa_linha = ""
+                    dados_linha = {
+                        "local": local if local_valido else "",
+                        "destino": destino if destino_valido else "",
+                        "data": data_linha,
+                        "etapa": etapa_linha,
+                    }
 
-                    for col in colunas:
-                        texto_col = col.text.strip()
+                    ultima_linha_qualquer = dados_linha
 
-                        # Sigla aeroporto (3 letras maiusculas)
-                        if re.match(r'^[A-Z]{3}$', texto_col):
-                            siglas.append(texto_col)
-
-                        # Data (DD/MM/YYYY HH:MM:SS ou DD/MM/YYYY HH:MM)
-                        elif re.match(r'\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}', texto_col):
-                            data_linha = texto_col
-
-                        # Nome da etapa
-                        elif texto_col in ("Reserva", "Embarque", "Desembarque",
-                                          "Emissão Conhecimento", "Consolidado",
-                                          "Corte de Carga", "Carga encontrada",
-                                          "Pré-despacho - Em aberto",
-                                          "Alocação de cargas - Entrada",
-                                          "Alocação de cargas - Saída",
-                                          "Carga não encontrada no recebimento",
-                                          "Retida (Análise Fiscal)",
-                                          "Entrega", "Saiu para entrega",
-                                          "Liberação"):
-                            etapa_linha = texto_col
-
-                    # Se achou Local e Destino (2 siglas)
-                    if len(siglas) >= 2:
-                        local = siglas[0]
-                        destino = siglas[1]
-
-                        ultima_linha_qualquer = {
-                            "local": local, "destino": destino,
-                            "data": data_linha, "etapa": etapa_linha
-                        }
-
-                        # Movimentacao real = Local diferente de Destino
-                        if local != destino:
-                            ultima_movimentacao_real = {
-                                "local": local, "destino": destino,
-                                "data": data_linha, "etapa": etapa_linha
-                            }
-
-                    elif len(siglas) == 1 and etapa_linha:
-                        # Linha com apenas 1 sigla (movimentacao interna)
-                        ultima_linha_qualquer = {
-                            "local": siglas[0], "destino": siglas[0],
-                            "data": data_linha, "etapa": etapa_linha
-                        }
+                    # Movimentacao real = Local diferente de Destino (ambos validos)
+                    if local_valido and destino_valido and local != destino:
+                        ultima_movimentacao_real = dados_linha
 
                 except Exception:
                     continue
 
             # Usa a ultima movimentacao real (Local != Destino)
-            # Se nao tem, usa a ultima linha com dados
             dados = ultima_movimentacao_real or ultima_linha_qualquer
 
             if dados:
