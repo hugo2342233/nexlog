@@ -57,10 +57,11 @@ def main():
     print(f"[DEBUG] termos: {resultado.termos}")
     print(f"[DEBUG] tem_comentario_retido: {resultado.tem_comentario_retido}")
     print(f"[DEBUG] observacao: {resultado.observacao}")
-    print(f"[DEBUG] tade_situacao: {resultado.tade_situacao}")
-    print(f"[DEBUG] tade_valor: {resultado.tade_valor}")
-    print(f"[DEBUG] tade_ta_path: {resultado.tade_ta_path}")
-    print(f"[DEBUG] tade_dar_path: {resultado.tade_dar_path}")
+    print(f"[DEBUG] tade_resultados: {len(resultado.tade_resultados)} termo(s) consultados")
+    for i, tade in enumerate(resultado.tade_resultados):
+        print(f"  [{i+1}] TA {tade['numero']}: {tade['situacao']} | {tade['valor']}")
+        print(f"      PDF TA: {tade['ta_path'] or 'Nao baixou'}")
+        print(f"      PDF DAR: {tade['dar_path'] or 'Nao baixou'}")
     print("-" * 40)
 
     # Fecha

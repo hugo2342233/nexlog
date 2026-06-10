@@ -50,12 +50,9 @@ class ResultadoConsulta:
     termos: List[str] = field(default_factory=list)
     tem_comentario_retido: bool = False
     observacao: str = ""
-    # Dados do TADe (preenchido automaticamente quando retido com termo)
-    tade_situacao: str = ""         # Ex: "Pendente (Enviar e-mail)"
-    tade_valor: str = ""            # Ex: "R$ 48,28"
-    tade_data: str = ""             # Ex: "09/06/2026"
-    tade_ta_path: str = ""          # Caminho do PDF do Termo
-    tade_dar_path: str = ""         # Caminho do PDF do DAR
+    # Dados dos TADes (preenchido automaticamente quando retido com termo)
+    # Cada item: {"numero", "situacao", "valor", "data", "ta_path", "dar_path"}
+    tade_resultados: List[dict] = field(default_factory=list)
 
     def resposta_cliente(self) -> str:
         """Texto pronto para copiar no WhatsApp."""
@@ -94,15 +91,50 @@ class ResultadoConsulta:
             linhas.append("Nenhum termo gerado ate o momento.")
 
         elif self.status == StatusAWB.RETIDO_COM_TERMO:
-            linhas.append("RETIDO - Termo de Apreensao SEFAZ:")
-            for ta in self.termos:
-                linhas.append(f"  TA {ta}")
-            if self.tade_situacao:
-                linhas.append(f"  Situacao: {self.tade_situacao}")
-            if self.tade_valor:
-                linhas.append(f"  Valor DAR: {self.tade_valor}")
-            if self.tade_ta_path or self.tade_dar_path:
-                linhas.append("  (PDFs do Termo e DAR baixados)")
+            linhas.append("RETIDO - Termo(s) de Apreensao SEFAZ:")
+            linhas.append("")
+
+            todos_liberados = True
+            tem_pago_restricao = False
+
+            for tade in self.tade_resultados:
+                num = tade.get("numero", "?")
+                sit = tade.get("situacao", "")
+                valor = tade.get("valor", "")
+
+                linha_ta = f"  TA {num}"
+                if sit:
+                    linha_ta += f" - {sit}"
+                if valor:
+                    linha_ta += f" ({valor})"
+                linhas.append(linha_ta)
+
+                # Verifica situacoes especiais
+                sit_upper = sit.upper()
+                if "LIBERADO" not in sit_upper and "LIBERAÇÃO AUTORIZADA" not in sit_upper:
+                    todos_liberados = False
+                if "PAGO COM RESTRI" in sit_upper:
+                    tem_pago_restricao = True
+
+            # Se nao tem tade_resultados, usa a lista simples de termos
+            if not self.tade_resultados:
+                todos_liberados = False
+                for ta in self.termos:
+                    linhas.append(f"  TA {ta}")
+
+            linhas.append("")
+
+            if tem_pago_restricao:
+                linhas.append("ATENCAO: A carga continua APREENDIDA pela SEFAZ por pendencias anteriores.")
+                linhas.append("O cliente deve entrar em contato com um CONTADOR para")
+                linhas.append("regularizar as pendencias com a SEFAZ.")
+            elif todos_liberados and self.tade_resultados:
+                linhas.append("Todos os termos estao LIBERADOS na SEFAZ.")
+                linhas.append("A carga sera liberada no sistema em breve.")
+            else:
+                pdfs_baixados = any(t.get("ta_path") or t.get("dar_path") for t in self.tade_resultados)
+                if pdfs_baixados:
+                    linhas.append("(PDFs do Termo e DAR baixados)")
 
         elif self.status == StatusAWB.NAO_CHEGOU:
             linhas.append("Ainda NAO CHEGOU em MCZ.")
@@ -528,22 +560,41 @@ class ConsultaCliente:
 
     def _consultar_tade_automatico(self, resultado: ResultadoConsulta):
         """
-        Quando o AWB esta retido com termo, consulta o TADe na SEFAZ
-        automaticamente e baixa os PDFs do Termo e DAR.
-        Usa o primeiro termo encontrado nos comentarios.
+        Quando o AWB esta retido com termo, consulta TODOS os TADes na SEFAZ
+        automaticamente e baixa os PDFs do Termo e DAR de cada um.
+        
+        Regras:
+        - Consulta CADA termo da lista resultado.termos
+        - Para cada termo: extrai situacao, valor, baixa TA e DAR
+        - Se situacao = "Pago com Restricao": avisa cliente sobre pendencias
+        - AWB so sera liberado se TODOS os termos estiverem "Liberado" na SEFAZ
         """
         try:
-            numero_termo = resultado.termos[0]  # Pega o primeiro termo
-
             tade = ConsultaTADe(self.browser)
-            dados_tade = tade.extrair_termo_e_dar(numero_termo)
 
-            # Preenche os dados no resultado
-            resultado.tade_situacao = dados_tade.get("situacao", "")
-            resultado.tade_valor = dados_tade.get("valor", "")
-            resultado.tade_data = dados_tade.get("data", "")
-            resultado.tade_ta_path = dados_tade.get("ta_path", "")
-            resultado.tade_dar_path = dados_tade.get("dar_path", "")
+            for numero_termo in resultado.termos:
+                try:
+                    dados_tade = tade.extrair_termo_e_dar(numero_termo)
+
+                    resultado.tade_resultados.append({
+                        "numero": numero_termo,
+                        "situacao": dados_tade.get("situacao", ""),
+                        "valor": dados_tade.get("valor", ""),
+                        "data": dados_tade.get("data", ""),
+                        "ta_path": dados_tade.get("ta_path", ""),
+                        "dar_path": dados_tade.get("dar_path", ""),
+                    })
+
+                except Exception:
+                    # Se falhou um termo, registra mas continua com os outros
+                    resultado.tade_resultados.append({
+                        "numero": numero_termo,
+                        "situacao": "Erro ao consultar",
+                        "valor": "",
+                        "data": "",
+                        "ta_path": "",
+                        "dar_path": "",
+                    })
 
             # Volta para aba Nexlog
             self.browser.voltar_aba_principal()
