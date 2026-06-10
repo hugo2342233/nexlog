@@ -1080,15 +1080,17 @@ class ConsultaTADe:
             tipo = campo_data.get_attribute("type") or ""
 
             if tipo == "date":
-                # Chrome input type=date: digita dia, TAB, mes, TAB, ano
+                # Chrome input type=date no Brasil (DD/MM/YYYY):
+                # Ao clicar, o DIA fica selecionado.
+                # Usa SETA DIREITA para navegar entre dia -> mes -> ano
                 campo_data.send_keys(dia)
-                time.sleep(0.2)
-                campo_data.send_keys(Keys.TAB)
-                time.sleep(0.2)
+                time.sleep(0.3)
+                campo_data.send_keys(Keys.ARROW_RIGHT)
+                time.sleep(0.3)
                 campo_data.send_keys(mes)
-                time.sleep(0.2)
-                campo_data.send_keys(Keys.TAB)
-                time.sleep(0.2)
+                time.sleep(0.3)
+                campo_data.send_keys(Keys.ARROW_RIGHT)
+                time.sleep(0.3)
                 campo_data.send_keys(ano)
                 time.sleep(0.5)
             else:
