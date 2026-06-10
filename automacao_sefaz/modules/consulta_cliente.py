@@ -1069,41 +1069,23 @@ class ConsultaTADe:
 
             # Calcula D+20 dias uteis
             data_vencimento = self._calcular_dia_util(20)
-            dia = data_vencimento.strftime("%d")
-            mes = data_vencimento.strftime("%m")
-            ano = data_vencimento.strftime("%Y")
 
             # Input type=date no Chrome: clica e digita DD MM YYYY (TAB entre partes)
             campo_data.click()
             time.sleep(0.5)
 
-            tipo = campo_data.get_attribute("type") or ""
+            # Seta valor via JavaScript (formato interno: YYYY-MM-DD)
+            # Input type=date aceita apenas este formato no .value
+            valor_iso = data_vencimento.strftime("%Y-%m-%d")
 
-            if tipo == "date":
-                # Chrome input type=date no Brasil (DD/MM/YYYY):
-                # Ao clicar, o DIA fica selecionado.
-                # Usa SETA DIREITA para navegar entre dia -> mes -> ano
-                campo_data.send_keys(dia)
-                time.sleep(0.3)
-                campo_data.send_keys(Keys.ARROW_RIGHT)
-                time.sleep(0.3)
-                campo_data.send_keys(mes)
-                time.sleep(0.3)
-                campo_data.send_keys(Keys.ARROW_RIGHT)
-                time.sleep(0.3)
-                campo_data.send_keys(ano)
-                time.sleep(0.5)
-            else:
-                # Input text: digita DD/MM/YYYY direto
-                campo_data.send_keys(f"{dia}/{mes}/{ano}")
-                time.sleep(0.5)
-
-            # Dispara eventos para Angular/JS detectar a mudanca
-            self.driver.execute_script(
-                "arguments[0].dispatchEvent(new Event('input', {bubbles: true})); "
-                "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
-                campo_data
-            )
+            self.driver.execute_script("""
+                var input = arguments[0];
+                var nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                    window.HTMLInputElement.prototype, 'value').set;
+                nativeInputValueSetter.call(input, arguments[1]);
+                input.dispatchEvent(new Event('input', {bubbles: true}));
+                input.dispatchEvent(new Event('change', {bubbles: true}));
+            """, campo_data, valor_iso)
             time.sleep(1)
 
         except Exception:
