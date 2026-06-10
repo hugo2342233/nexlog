@@ -265,9 +265,19 @@ class ConsultaCliente:
             logger.debug(f"Extrair dados modal erro: {e}")
 
     def _extrair_ultima_etapa(self, resultado: ResultadoConsulta):
-        """Extrai a ultima etapa da tabela de rastreio dentro do modal."""
+        """
+        Extrai a ultima movimentacao da tabela de rastreio.
+        
+        A tabela mostra etapas em ordem cronologica (1, 2, 3...).
+        Cada linha tem colunas: Etapa | Sigla | Acoes | Id.op | Local | Destino | Data | Obs | Resp | Ref
+        
+        Logica:
+        - Percorre TODAS as linhas e coleta Local/Destino de cada uma
+        - A ultima movimentacao REAL eh a ultima linha que tem Local DIFERENTE de Destino
+          (linhas com mesmo Local=Destino sao movimentacoes internas)
+        - Se nao encontrar, pega a ultima linha com qualquer Local/Destino
+        """
         try:
-            # Busca todas as linhas da tabela dentro do modal
             linhas = self.driver.find_elements(By.XPATH,
                 "//div[@id='modalContainer']//table//tbody//tr"
                 " | //div[contains(@class,'modal')][contains(@style,'display: block')]//table//tbody//tr"
@@ -276,8 +286,12 @@ class ConsultaCliente:
             if not linhas:
                 return
 
-            # Pega a ultima linha com dados
-            for linha in reversed(linhas):
+            # Coleta dados de TODAS as linhas
+            ultima_movimentacao_real = None  # Local != Destino (ex: GRU > MCZ)
+            ultima_linha_qualquer = None     # Qualquer linha com dados
+            data_ultima = ""
+
+            for linha in linhas:
                 try:
                     colunas = linha.find_elements(By.TAG_NAME, "td")
                     if len(colunas) < 5:
@@ -287,36 +301,72 @@ class ConsultaCliente:
                     if not texto_linha:
                         continue
 
-                    # Estrutura da tabela observada:
-                    # Etapa | Sigla | Acoes | Id. operacao | Local | Destino | Data | Obs | Resp | Ref
-                    # Indices podem variar, vamos buscar por conteudo
+                    # Extrai siglas de 3 letras (Local e Destino)
+                    siglas = []
+                    data_linha = ""
+                    etapa_linha = ""
 
-                    for i, col in enumerate(colunas):
+                    for col in colunas:
                         texto_col = col.text.strip()
 
-                        # Sigla de 3 letras = Local ou Destino
+                        # Sigla aeroporto (3 letras maiusculas)
                         if re.match(r'^[A-Z]{3}$', texto_col):
-                            if not resultado.ultimo_local:
-                                resultado.ultimo_local = texto_col
-                            else:
-                                resultado.ultimo_destino = texto_col
+                            siglas.append(texto_col)
 
-                        # Data
-                        if re.match(r'\d{2}/\d{2}/\d{4}', texto_col):
-                            resultado.data_ultima_etapa = texto_col
+                        # Data (DD/MM/YYYY HH:MM:SS ou DD/MM/YYYY HH:MM)
+                        elif re.match(r'\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}', texto_col):
+                            data_linha = texto_col
 
-                        # Nome da etapa (Reserva, Embarque, Desembarque, etc.)
-                        if texto_col in ("Reserva", "Embarque", "Desembarque",
-                                        "Pré-despacho - Em aberto", "Corte de Carga",
-                                        "Emissão Conhecimento", "Consolidado",
-                                        "Entrega", "Saiu para entrega"):
-                            resultado.ultima_etapa = texto_col
+                        # Nome da etapa
+                        elif texto_col in ("Reserva", "Embarque", "Desembarque",
+                                          "Emissão Conhecimento", "Consolidado",
+                                          "Corte de Carga", "Carga encontrada",
+                                          "Pré-despacho - Em aberto",
+                                          "Alocação de cargas - Entrada",
+                                          "Alocação de cargas - Saída",
+                                          "Carga não encontrada no recebimento",
+                                          "Retida (Análise Fiscal)",
+                                          "Entrega", "Saiu para entrega",
+                                          "Liberação"):
+                            etapa_linha = texto_col
 
-                    if resultado.ultimo_local or resultado.ultima_etapa:
-                        break  # Encontrou dados na ultima linha
+                    # Se achou Local e Destino (2 siglas)
+                    if len(siglas) >= 2:
+                        local = siglas[0]
+                        destino = siglas[1]
+
+                        ultima_linha_qualquer = {
+                            "local": local, "destino": destino,
+                            "data": data_linha, "etapa": etapa_linha
+                        }
+
+                        # Movimentacao real = Local diferente de Destino
+                        if local != destino:
+                            ultima_movimentacao_real = {
+                                "local": local, "destino": destino,
+                                "data": data_linha, "etapa": etapa_linha
+                            }
+
+                    elif len(siglas) == 1 and etapa_linha:
+                        # Linha com apenas 1 sigla (movimentacao interna)
+                        ultima_linha_qualquer = {
+                            "local": siglas[0], "destino": siglas[0],
+                            "data": data_linha, "etapa": etapa_linha
+                        }
 
                 except Exception:
                     continue
+
+            # Usa a ultima movimentacao real (Local != Destino)
+            # Se nao tem, usa a ultima linha com dados
+            dados = ultima_movimentacao_real or ultima_linha_qualquer
+
+            if dados:
+                resultado.ultimo_local = dados["local"]
+                resultado.ultimo_destino = dados["destino"]
+                resultado.data_ultima_etapa = dados["data"]
+                if dados["etapa"]:
+                    resultado.ultima_etapa = dados["etapa"]
 
         except Exception:
             pass
