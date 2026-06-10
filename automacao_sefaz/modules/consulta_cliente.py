@@ -964,17 +964,23 @@ class ConsultaTADe:
     def _baixar_dar(self) -> str:
         """
         Clica no icone de lupa na coluna DAR.
-        Abre modal "Itens Infracao TA" com checkbox + botao "Imprimir DAR".
-        Clica "Imprimir DAR" -> abre PDF em nova aba.
+        Abre modal "Itens Infracao TA" com:
+        - Campo "Data de Vencimento" (pode estar vazio — precisa preencher)
+        - Checkboxes dos tributos (FECOEP, ICMS, etc.)
+        - Botao "Imprimir DAR"
+        
+        Se Data de Vencimento estiver vazio, preenche com D+1 (amanha).
+        Garante checkboxes marcados antes de imprimir.
         
         Returns:
             Caminho do PDF salvo, ou "" se falhou
         """
+        from datetime import datetime, timedelta
+
         try:
             abas_antes = set(self.driver.window_handles)
 
             # Clica no icone DAR (lupa - segundo icone/botao da linha)
-            # Coluna DAR e a 6a (indice 5)
             botao_dar = self.driver.find_element(By.XPATH,
                 "//table//tbody//tr//td[6]//button"
                 " | //table//tbody//tr//td[6]//a"
@@ -985,7 +991,7 @@ class ConsultaTADe:
             botao_dar.click()
             time.sleep(4)
 
-            # Modal "Itens Infracao TA" abre com checkboxes e botao "Imprimir DAR"
+            # Modal "Itens Infracao TA" abre
             # Aguarda o botao "Imprimir DAR" aparecer
             btn_imprimir_dar = self.wait.until(
                 EC.element_to_be_clickable((By.XPATH,
@@ -994,6 +1000,12 @@ class ConsultaTADe:
                 ))
             )
             time.sleep(1)
+
+            # Verifica se o campo "Data de Vencimento" esta vazio e preenche
+            self._preencher_data_vencimento_dar()
+
+            # Garante que os checkboxes dos tributos estao marcados
+            self._marcar_checkboxes_dar()
 
             # Clica "Imprimir DAR"
             abas_antes_dar = set(self.driver.window_handles)
@@ -1026,6 +1038,78 @@ class ConsultaTADe:
             except Exception:
                 pass
             return ""
+
+    def _preencher_data_vencimento_dar(self):
+        """
+        Verifica se o campo 'Data de Vencimento' esta vazio.
+        Se estiver, preenche com D+1 (amanha).
+        Se ja tiver data, nao mexe.
+        """
+        from datetime import datetime, timedelta
+
+        try:
+            # Busca campo de data no modal (input type date ou text com placeholder data)
+            campo_data = self.driver.find_element(By.XPATH,
+                "//input[@type='date']"
+                " | //input[contains(@placeholder,'dd/mm') or contains(@placeholder,'DD/MM')]"
+                " | //input[contains(@id,'vencimento') or contains(@name,'vencimento')]"
+                " | //input[contains(@id,'Vencimento') or contains(@name,'Vencimento')]"
+                " | //label[contains(.,'Vencimento')]/following::input[1]"
+                " | //label[contains(.,'vencimento')]/following::input[1]"
+            )
+
+            valor_atual = campo_data.get_attribute("value") or ""
+
+            if not valor_atual.strip():
+                # Campo vazio — preenche com amanha (D+1)
+                amanha = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
+
+                campo_data.click()
+                campo_data.send_keys(Keys.CONTROL, "a")
+                campo_data.send_keys(Keys.BACKSPACE)
+
+                # Tenta formato DD/MM/YYYY (input text)
+                campo_data.send_keys(amanha)
+                time.sleep(0.5)
+
+                # Se for input type=date, precisa formato YYYY-MM-DD
+                tipo = campo_data.get_attribute("type") or ""
+                if tipo == "date":
+                    amanha_iso = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+                    self.driver.execute_script(
+                        "arguments[0].value = arguments[1]; "
+                        "arguments[0].dispatchEvent(new Event('input', {bubbles: true})); "
+                        "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
+                        campo_data, amanha_iso
+                    )
+
+                time.sleep(1)
+
+        except Exception:
+            pass  # Se nao encontrou campo de data, segue sem preencher
+
+    def _marcar_checkboxes_dar(self):
+        """
+        Garante que todos os checkboxes dos tributos estao marcados no modal do DAR.
+        (FECOEP, ICMS, etc.)
+        """
+        try:
+            checkboxes = self.driver.find_elements(By.XPATH,
+                "//div[contains(@class,'modal')]//input[@type='checkbox']"
+                " | //input[@type='checkbox']"
+            )
+            for cb in checkboxes:
+                try:
+                    if cb.is_displayed() and not cb.is_selected():
+                        try:
+                            cb.click()
+                        except Exception:
+                            self.driver.execute_script("arguments[0].click();", cb)
+                        time.sleep(0.3)
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
     def _salvar_pdf_nova_aba(self, abas_antes: set, prefixo: str) -> str:
         """
