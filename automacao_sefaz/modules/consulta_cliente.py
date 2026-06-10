@@ -524,3 +524,354 @@ class ConsultaCliente:
             time.sleep(1)
         except Exception:
             self.browser._fechar_modais()
+
+
+
+class ConsultaTADe:
+    """
+    Consulta Termo de Apreensao (TADe) no site da SEFAZ-AL.
+    Extrai PDF do Termo (TA) e do DAR para enviar ao cliente.
+    
+    Fluxo:
+    1. Acessa SEFAZ > Consultar TADe
+    2. Digita numero do termo no campo "No do TADe"
+    3. Clica "Consultar"
+    4. Na tabela de resultado:
+       - Coluna TA: clica icone impressora -> abre PDF em nova aba
+       - Coluna DAR: clica icone lupa -> abre modal "Itens Infracao TA"
+         -> clica "Imprimir DAR" -> abre PDF em nova aba
+    5. Captura as novas abas e salva os PDFs
+    """
+
+    def __init__(self, browser):
+        from modules.sefaz import SefazConsulta
+        self.browser = browser
+        self.driver = browser.driver
+        self.wait = browser.wait
+        self.sefaz = SefazConsulta(self.driver)
+
+    def extrair_termo_e_dar(self, numero_termo: str) -> dict:
+        """
+        Consulta um TADe na SEFAZ e extrai os PDFs do Termo e do DAR.
+        
+        Args:
+            numero_termo: Numero do TADe (ex: "2426405")
+            
+        Returns:
+            dict com:
+                "ta_path": caminho do PDF do Termo (ou "")
+                "dar_path": caminho do PDF do DAR (ou "")
+                "situacao": situacao do termo (ex: "Pendente (Enviar e-mail)")
+                "valor": valor do DAR (ex: "R$ 48,28")
+                "data": data do termo
+                "erro": mensagem de erro se falhou
+        """
+        resultado = {
+            "ta_path": "",
+            "dar_path": "",
+            "situacao": "",
+            "valor": "",
+            "data": "",
+            "erro": "",
+        }
+
+        try:
+            # Abre SEFAZ e faz login se necessario
+            self.sefaz.abrir_sefaz()
+            if not self.sefaz.logado:
+                self.sefaz.login()
+
+            # Navega para Consultar TADe
+            self._navegar_consultar_tade()
+            time.sleep(3)
+
+            # Preenche numero do termo
+            self._preencher_numero_termo(numero_termo)
+            time.sleep(1)
+
+            # Clica Consultar
+            self._clicar_consultar()
+            time.sleep(5)
+
+            # Extrai dados da tabela de resultado
+            self._extrair_dados_tabela(resultado)
+
+            # Baixa PDF do Termo (TA)
+            resultado["ta_path"] = self._baixar_ta()
+
+            # Baixa PDF do DAR
+            resultado["dar_path"] = self._baixar_dar()
+
+        except Exception as e:
+            resultado["erro"] = str(e)[:100]
+
+        # Volta para o Nexlog
+        try:
+            self.sefaz.voltar_para_nexlog()
+        except Exception:
+            pass
+
+        return resultado
+
+    def _navegar_consultar_tade(self):
+        """Navega para a pagina Consultar TADe."""
+        # Se ja esta na aba SEFAZ, tenta encontrar o botao/link
+        try:
+            # Tenta clicar no botao "Consultar TADe" na pagina inicial
+            botao = self.driver.find_element(By.XPATH,
+                "//a[contains(.,'Consultar TADe')]"
+                " | //span[contains(.,'Consultar TADe')]/ancestor::a"
+                " | //*[contains(text(),'Consultar TADe')]"
+            )
+            if botao.is_displayed():
+                botao.click()
+                time.sleep(3)
+                return
+        except Exception:
+            pass
+
+        # Fallback: URL direta
+        self.driver.get("https://transportadoras.sefaz.al.gov.br/#/consultar-tade")
+        time.sleep(3)
+
+    def _preencher_numero_termo(self, numero: str):
+        """Preenche o campo 'No do TADe'."""
+        # Busca campo de input (label "No do TADe" -> input proximo)
+        campo = self.wait.until(
+            EC.element_to_be_clickable((By.XPATH,
+                "//input[contains(@placeholder,'TADe') or contains(@placeholder,'tade') "
+                "or contains(@placeholder,'mero')]"
+                " | //label[contains(.,'TADe')]/following::input[1]"
+                " | //label[contains(.,'TADe')]/..//input"
+                " | //input[@type='text' or @type='number']"
+            ))
+        )
+        campo.click()
+        campo.send_keys(Keys.CONTROL, "a")
+        campo.send_keys(Keys.BACKSPACE)
+        campo.send_keys(numero)
+        time.sleep(0.5)
+
+    def _clicar_consultar(self):
+        """Clica no botao 'Consultar' (verde)."""
+        botao = self.wait.until(
+            EC.element_to_be_clickable((By.XPATH,
+                "//button[contains(.,'Consultar')]"
+                " | //button[contains(@class,'btn-primary') or contains(@class,'btn-success')]"
+            ))
+        )
+        botao.click()
+
+    def _extrair_dados_tabela(self, resultado: dict):
+        """Extrai dados da linha da tabela de resultado (situacao, valor, data)."""
+        try:
+            # Aguarda tabela aparecer
+            self.wait.until(
+                EC.presence_of_element_located((By.XPATH,
+                    "//table//tbody//tr//td"
+                ))
+            )
+            time.sleep(2)
+
+            # Le primeira linha da tabela
+            linha = self.driver.find_element(By.XPATH, "//table//tbody//tr")
+            colunas = linha.find_elements(By.TAG_NAME, "td")
+
+            if len(colunas) >= 4:
+                # Colunas: No TADe | Data | Situacao | Valor | TA | DAR | Email | Liberar
+                resultado["data"] = colunas[1].text.strip()
+                resultado["situacao"] = colunas[2].text.strip()
+                resultado["valor"] = colunas[3].text.strip()
+
+        except Exception:
+            pass
+
+    def _baixar_ta(self) -> str:
+        """
+        Clica no icone de impressora na coluna TA.
+        O PDF abre em nova aba. Salva via Chrome print-to-pdf.
+        
+        Returns:
+            Caminho do PDF salvo, ou "" se falhou
+        """
+        import os
+        from config import PASTA_DOWNLOADS
+
+        try:
+            abas_antes = set(self.driver.window_handles)
+
+            # Clica no icone da coluna TA (impressora - primeiro icone da linha)
+            # A coluna TA vem apos Valor, entao e o 5o td (indice 4)
+            botao_ta = self.driver.find_element(By.XPATH,
+                "//table//tbody//tr//td[5]//button"
+                " | //table//tbody//tr//td[5]//a"
+                " | //table//tbody//tr//td[5]//i/ancestor::button"
+                " | //table//tbody//tr//td[5]//i/ancestor::a"
+                " | (//table//tbody//tr//button[contains(@class,'btn')])[1]"
+            )
+            botao_ta.click()
+            time.sleep(5)
+
+            # Detecta nova aba
+            caminho = self._salvar_pdf_nova_aba(abas_antes, "termo")
+            return caminho
+
+        except Exception as e:
+            logger.debug(f"Erro ao baixar TA: {e}")
+            return ""
+
+    def _baixar_dar(self) -> str:
+        """
+        Clica no icone de lupa na coluna DAR.
+        Abre modal "Itens Infracao TA" com checkbox + botao "Imprimir DAR".
+        Clica "Imprimir DAR" -> abre PDF em nova aba.
+        
+        Returns:
+            Caminho do PDF salvo, ou "" se falhou
+        """
+        try:
+            abas_antes = set(self.driver.window_handles)
+
+            # Clica no icone DAR (lupa - segundo icone/botao da linha)
+            # Coluna DAR e a 6a (indice 5)
+            botao_dar = self.driver.find_element(By.XPATH,
+                "//table//tbody//tr//td[6]//button"
+                " | //table//tbody//tr//td[6]//a"
+                " | //table//tbody//tr//td[6]//i/ancestor::button"
+                " | //table//tbody//tr//td[6]//i/ancestor::a"
+                " | (//table//tbody//tr//button[contains(@class,'btn')])[2]"
+            )
+            botao_dar.click()
+            time.sleep(4)
+
+            # Modal "Itens Infracao TA" abre com checkboxes e botao "Imprimir DAR"
+            # Aguarda o botao "Imprimir DAR" aparecer
+            btn_imprimir_dar = self.wait.until(
+                EC.element_to_be_clickable((By.XPATH,
+                    "//button[contains(.,'Imprimir DAR')]"
+                    " | //a[contains(.,'Imprimir DAR')]"
+                ))
+            )
+            time.sleep(1)
+
+            # Clica "Imprimir DAR"
+            abas_antes_dar = set(self.driver.window_handles)
+            btn_imprimir_dar.click()
+            time.sleep(5)
+
+            # Detecta nova aba com o PDF do DAR
+            caminho = self._salvar_pdf_nova_aba(abas_antes_dar, "dar")
+
+            # Fecha modal (botao "Fechar")
+            try:
+                btn_fechar = self.driver.find_element(By.XPATH,
+                    "//button[contains(.,'Fechar')]"
+                )
+                btn_fechar.click()
+                time.sleep(1)
+            except Exception:
+                pass
+
+            return caminho
+
+        except Exception as e:
+            logger.debug(f"Erro ao baixar DAR: {e}")
+            # Tenta fechar modal se abriu
+            try:
+                btn_fechar = self.driver.find_element(By.XPATH,
+                    "//button[contains(.,'Fechar')]"
+                )
+                btn_fechar.click()
+            except Exception:
+                pass
+            return ""
+
+    def _salvar_pdf_nova_aba(self, abas_antes: set, prefixo: str) -> str:
+        """
+        Detecta nova aba aberta (PDF), salva o conteudo como PDF
+        usando Chrome DevTools Protocol (print to PDF).
+        
+        Args:
+            abas_antes: set de window handles antes de clicar
+            prefixo: "termo" ou "dar" (para nome do arquivo)
+            
+        Returns:
+            Caminho do arquivo salvo, ou ""
+        """
+        import os
+        import base64
+        from config import PASTA_DOWNLOADS
+
+        try:
+            # Espera nova aba aparecer (max 10s)
+            tempo_inicio = time.time()
+            nova_aba = None
+
+            while time.time() - tempo_inicio < 10:
+                abas_atuais = set(self.driver.window_handles)
+                novas = abas_atuais - abas_antes
+                if novas:
+                    nova_aba = list(novas)[0]
+                    break
+                time.sleep(0.5)
+
+            if not nova_aba:
+                return ""
+
+            # Troca para a nova aba
+            aba_anterior = self.driver.current_window_handle
+            self.driver.switch_to.window(nova_aba)
+            time.sleep(3)
+
+            # Salva como PDF usando Chrome DevTools Protocol
+            caminho_pdf = ""
+            try:
+                # Usa Page.printToPDF do Chrome DevTools
+                result = self.driver.execute_cdp_cmd("Page.printToPDF", {
+                    "printBackground": True,
+                    "preferCSSPageSize": True,
+                })
+                pdf_data = base64.b64decode(result["data"])
+
+                # Salva arquivo
+                nome_arquivo = f"sefaz_{prefixo}_{int(time.time())}.pdf"
+                caminho_pdf = os.path.join(str(PASTA_DOWNLOADS), nome_arquivo)
+                os.makedirs(str(PASTA_DOWNLOADS), exist_ok=True)
+
+                with open(caminho_pdf, "wb") as f:
+                    f.write(pdf_data)
+
+            except Exception:
+                # Fallback: tenta pegar URL do PDF e baixar via requests
+                try:
+                    url_pdf = self.driver.current_url
+                    if url_pdf and "pdf" in url_pdf.lower():
+                        import requests
+                        resp = requests.get(url_pdf, timeout=15)
+                        if resp.status_code == 200:
+                            nome_arquivo = f"sefaz_{prefixo}_{int(time.time())}.pdf"
+                            caminho_pdf = os.path.join(str(PASTA_DOWNLOADS), nome_arquivo)
+                            with open(caminho_pdf, "wb") as f:
+                                f.write(resp.content)
+                except Exception:
+                    pass
+
+            # Fecha a aba do PDF e volta
+            try:
+                self.driver.close()
+            except Exception:
+                pass
+
+            self.driver.switch_to.window(aba_anterior)
+            return caminho_pdf
+
+        except Exception as e:
+            logger.debug(f"Salvar PDF nova aba erro: {e}")
+            # Garante que volta para aba correta
+            try:
+                abas = self.driver.window_handles
+                if abas:
+                    self.driver.switch_to.window(abas[-1])
+            except Exception:
+                pass
+            return ""
