@@ -1042,13 +1042,17 @@ class ConsultaTADe:
     def _preencher_data_vencimento_dar(self):
         """
         Verifica se o campo 'Data de Vencimento' esta vazio.
-        Se estiver, preenche com D+1 (amanha).
+        Se estiver, preenche com D+20 dias uteis (pula sabado/domingo).
         Se ja tiver data, nao mexe.
+        
+        O campo e um input type=date — nao aceita colar texto.
+        Precisa digitar dia, mes, ano separadamente (TAB entre campos internos).
+        No Chrome, input type=date aceita digitacao: DD TAB MM TAB YYYY.
         """
         from datetime import datetime, timedelta
 
         try:
-            # Busca campo de data no modal (input type date ou text com placeholder data)
+            # Busca campo de data no modal
             campo_data = self.driver.find_element(By.XPATH,
                 "//input[@type='date']"
                 " | //input[contains(@placeholder,'dd/mm') or contains(@placeholder,'DD/MM')]"
@@ -1060,33 +1064,71 @@ class ConsultaTADe:
 
             valor_atual = campo_data.get_attribute("value") or ""
 
-            if not valor_atual.strip():
-                # Campo vazio — preenche com amanha (D+1)
-                amanha = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
+            if valor_atual.strip():
+                return  # Ja tem data, nao mexe
 
-                campo_data.click()
-                campo_data.send_keys(Keys.CONTROL, "a")
-                campo_data.send_keys(Keys.BACKSPACE)
+            # Calcula D+20 dias uteis
+            data_vencimento = self._calcular_dia_util(20)
+            dia = data_vencimento.strftime("%d")
+            mes = data_vencimento.strftime("%m")
+            ano = data_vencimento.strftime("%Y")
 
-                # Tenta formato DD/MM/YYYY (input text)
-                campo_data.send_keys(amanha)
+            # Input type=date no Chrome: clica e digita DD MM YYYY (TAB entre partes)
+            campo_data.click()
+            time.sleep(0.5)
+
+            tipo = campo_data.get_attribute("type") or ""
+
+            if tipo == "date":
+                # Chrome input type=date: digita dia, TAB, mes, TAB, ano
+                campo_data.send_keys(dia)
+                time.sleep(0.2)
+                campo_data.send_keys(Keys.TAB)
+                time.sleep(0.2)
+                campo_data.send_keys(mes)
+                time.sleep(0.2)
+                campo_data.send_keys(Keys.TAB)
+                time.sleep(0.2)
+                campo_data.send_keys(ano)
+                time.sleep(0.5)
+            else:
+                # Input text: digita DD/MM/YYYY direto
+                campo_data.send_keys(f"{dia}/{mes}/{ano}")
                 time.sleep(0.5)
 
-                # Se for input type=date, precisa formato YYYY-MM-DD
-                tipo = campo_data.get_attribute("type") or ""
-                if tipo == "date":
-                    amanha_iso = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-                    self.driver.execute_script(
-                        "arguments[0].value = arguments[1]; "
-                        "arguments[0].dispatchEvent(new Event('input', {bubbles: true})); "
-                        "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
-                        campo_data, amanha_iso
-                    )
-
-                time.sleep(1)
+            # Dispara eventos para Angular/JS detectar a mudanca
+            self.driver.execute_script(
+                "arguments[0].dispatchEvent(new Event('input', {bubbles: true})); "
+                "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
+                campo_data
+            )
+            time.sleep(1)
 
         except Exception:
             pass  # Se nao encontrou campo de data, segue sem preencher
+
+    def _calcular_dia_util(self, dias_uteis: int) -> 'datetime':
+        """
+        Calcula uma data futura pulando sabados e domingos.
+        
+        Args:
+            dias_uteis: quantidade de dias uteis para frente (ex: 20)
+            
+        Returns:
+            datetime com a data futura (dia util)
+        """
+        from datetime import datetime, timedelta
+
+        data = datetime.now()
+        dias_contados = 0
+
+        while dias_contados < dias_uteis:
+            data += timedelta(days=1)
+            # 0=segunda ... 4=sexta, 5=sabado, 6=domingo
+            if data.weekday() < 5:
+                dias_contados += 1
+
+        return data
 
     def _marcar_checkboxes_dar(self):
         """
