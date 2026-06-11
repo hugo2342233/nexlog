@@ -144,40 +144,86 @@ def extrair_termos(texto: str) -> List[TermoApreensao]:
             termos.append(termo)
             logger.debug(f"Termo encontrado: {termo.numero} - CTe: {termo.cte} - NF-e: {termo.nfe}")
 
+            # IMPORTANTE: Um termo pode ter MULTIPLOS CTes em linhas seguintes
+            # (ex: TA 2432400 com CT-e 7404445 E CT-e 239509 em linhas diferentes)
+            # Busca CTes adicionais nas linhas seguintes ate encontrar novo termo
+            ultimo_termo_numero = num_termo
+            ultimo_termo_situacao = match_situacao.group(1) if match_situacao else ""
+            ultimo_termo_data = match_data.group(1) if match_data else ""
+
+            for j in range(i + 1, min(i + 20, len(linhas))):
+                linha_seguinte = linhas[j]
+                # Para se encontrar outro termo (7 digitos no inicio)
+                if re.match(r'\s*\d{7}\b', linha_seguinte):
+                    break
+
+                # Busca CTes adicionais na linha seguinte
+                cte_extra = (
+                    re.search(r'CT-?[eE]\s*[:\s]*(\d+)', linha_seguinte) or
+                    re.search(r'CTE\s*[:\s]*(\d+)', linha_seguinte, re.IGNORECASE)
+                )
+                nfe_extra = (
+                    re.search(r'NF-?[eE]\s*[:\s]*(\d+)', linha_seguinte) or
+                    re.search(r'NFE\s*[:\s]*(\d+)', linha_seguinte, re.IGNORECASE)
+                )
+
+                if cte_extra:
+                    cte_num = cte_extra.group(1)
+                    nfe_num = nfe_extra.group(1) if nfe_extra else ""
+                    # So adiciona se CTe diferente do ja encontrado
+                    ctes_ja_adicionados = set(t.cte for t in termos if t.numero == ultimo_termo_numero)
+                    if cte_num not in ctes_ja_adicionados:
+                        termo_extra = TermoApreensao(
+                            numero=ultimo_termo_numero,
+                            situacao=parsear_situacao(ultimo_termo_situacao) if ultimo_termo_situacao else SituacaoTermo.DESCONHECIDO,
+                            data_emissao=ultimo_termo_data,
+                            tipo_fiel=tipo_atual,
+                            nfe=nfe_num,
+                            cte=cte_num,
+                        )
+                        termos.append(termo_extra)
+                        logger.debug(f"Termo {ultimo_termo_numero} CTe EXTRA: {cte_num}")
+
         elif match_termo and not match_cte and not match_nfe:
             # Termo encontrado SEM CTe/NF-e na mesma linha
-            # Tenta buscar nas linhas adjacentes
+            # Tenta buscar nas linhas seguintes (pode ter multiplos CTes)
             num_termo = match_termo.group(1)
-            num_cte = ""
-            num_nfe = ""
+            ctes_encontrados = []
+            nfes_encontrados = []
 
-            for offset in [1, 2, -1]:
+            for offset in range(1, 20):
                 idx = i + offset
-                if 0 <= idx < len(linhas):
-                    linha_adj = linhas[idx]
-                    if not num_cte:
-                        m = (re.search(r'CT-?[eE]\s*[:\s]*(\d+)', linha_adj) or
-                             re.search(r'CTE\s*[:\s]*(\d+)', linha_adj, re.IGNORECASE))
-                        if m:
-                            num_cte = m.group(1)
-                    if not num_nfe:
-                        m = (re.search(r'NF-?[eE]\s*[:\s]*(\d+)', linha_adj) or
-                             re.search(r'NFE\s*[:\s]*(\d+)', linha_adj, re.IGNORECASE))
-                        if m:
-                            num_nfe = m.group(1)
+                if idx >= len(linhas):
+                    break
+                linha_adj = linhas[idx]
+                # Para se encontrar outro termo
+                if re.match(r'\s*\d{7}\b', linha_adj):
+                    break
 
-            # Se encontrou CTe/NF-e nas adjacentes E temos data ou situacao
-            if (num_cte or num_nfe) and (match_data or match_situacao):
-                termo = TermoApreensao(
-                    numero=num_termo,
-                    situacao=parsear_situacao(match_situacao.group(1)) if match_situacao else SituacaoTermo.DESCONHECIDO,
-                    data_emissao=match_data.group(1) if match_data else "",
-                    tipo_fiel=tipo_atual,
-                    nfe=num_nfe,
-                    cte=num_cte,
-                )
-                termos.append(termo)
-                logger.debug(f"Termo encontrado (adjacente): {termo.numero} - CTe: {termo.cte}")
+                m_cte = (re.search(r'CT-?[eE]\s*[:\s]*(\d+)', linha_adj) or
+                         re.search(r'CTE\s*[:\s]*(\d+)', linha_adj, re.IGNORECASE))
+                m_nfe = (re.search(r'NF-?[eE]\s*[:\s]*(\d+)', linha_adj) or
+                         re.search(r'NFE\s*[:\s]*(\d+)', linha_adj, re.IGNORECASE))
+
+                if m_cte:
+                    cte_val = m_cte.group(1)
+                    nfe_val = m_nfe.group(1) if m_nfe else ""
+                    if cte_val not in [c[0] for c in ctes_encontrados]:
+                        ctes_encontrados.append((cte_val, nfe_val))
+
+            # Cria um TermoApreensao para CADA CTe encontrado
+            if ctes_encontrados:
+                for cte_val, nfe_val in ctes_encontrados:
+                    termo = TermoApreensao(
+                        numero=num_termo,
+                        situacao=parsear_situacao(match_situacao.group(1)) if match_situacao else SituacaoTermo.DESCONHECIDO,
+                        data_emissao=match_data.group(1) if match_data else "",
+                        tipo_fiel=tipo_atual,
+                        nfe=nfe_val,
+                        cte=cte_val,
+                    )
+                    termos.append(termo)
+                    logger.debug(f"Termo encontrado (multi-cte): {num_termo} - CTe: {cte_val}")
 
     # Tenta regex mais complexo se nao encontrou nada
     if not termos:
