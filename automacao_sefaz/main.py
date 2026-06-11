@@ -1227,6 +1227,10 @@ class AppAutomacao:
                     self._log(f"    CTe {cte}: AWB nao encontrado")
 
             self._log(f"  Comentarios: {resultado.comentarios_adicionados} OK / {resultado.comentarios_falha} falhas")
+
+            # SEGURANCA: Se teve QUALQUER falha em comentarios, marca no resultado
+            if resultado.comentarios_falha > 0:
+                self._log(f"  AVISO: {resultado.comentarios_falha} comentario(s) falharam")
         else:
             _prog("5/6 Sem termos")
             self._log("  [5/6] Sem termos para comentar")
@@ -1250,15 +1254,29 @@ class AppAutomacao:
                 # para saber quais AWBs NÃO devem ser liberados
                 ctes_retidos = set(consulta.ctes_retidos)
 
-                # Coleta AWBs que tem termo (foram mapeados na etapa 5)
-                for cte in ctes_retidos:
-                    awb = mapa_cte_awb.get(cte, "")
-                    if awb:
-                        awbs_com_termo.add(awb)
-                        self._log(f"    AWB {awb} (CTe {cte}) -> RETIDO (nao libera)")
+                # SEGURANCA: Verifica se TODOS os CTes com termo foram mapeados
+                # Se algum CTe nao foi encontrado, NAO libera nenhum AWB do voo
+                ctes_nao_mapeados = [cte for cte in ctes_retidos if cte not in mapa_cte_awb]
 
-                # Libera apenas RETIRA que NAO tem termo
-                awbs_para_liberar = manifesto.awbs_retira - awbs_com_termo
+                if ctes_nao_mapeados:
+                    self._log(f"  SEGURANCA: {len(ctes_nao_mapeados)} CTe(s) com termo NAO mapeados!")
+                    for cte in ctes_nao_mapeados:
+                        self._log(f"    CTe {cte}: AWB nao encontrado - NAO LIBERA NENHUM")
+                    self._log(f"  VOO BLOQUEADO: Nao libera nenhum AWB por seguranca")
+                    resultado.erros.append(
+                        f"CTe(s) com termo sem AWB: {', '.join(ctes_nao_mapeados)} - voo nao liberado")
+                    awbs_para_liberar = set()  # NAO libera nada
+                else:
+                    # Todos os CTes com termo foram mapeados - pode filtrar normalmente
+                    # Coleta AWBs que tem termo (foram mapeados na etapa 5)
+                    for cte in ctes_retidos:
+                        awb = mapa_cte_awb.get(cte, "")
+                        if awb:
+                            awbs_com_termo.add(awb)
+                            self._log(f"    AWB {awb} (CTe {cte}) -> RETIDO (nao libera)")
+
+                    # Libera apenas RETIRA que NAO tem termo
+                    awbs_para_liberar = manifesto.awbs_retira - awbs_com_termo
 
                 if awbs_com_termo:
                     self._log(f"  {len(awbs_com_termo)} AWB(s) com termo (nao libera)")
