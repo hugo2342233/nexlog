@@ -940,6 +940,9 @@ class AppAutomacao:
         voos_sucesso = 0
         voos_erro = 0
 
+        # Acumula AWBs com termo de TODOS os voos para verificacao final
+        awbs_com_termo_sessao = {}  # {awb: cte} - todos os AWBs que deveriam estar retidos
+
         try:
             # Inicia navegador
             browser = NexlogBrowser()
@@ -993,6 +996,10 @@ class AppAutomacao:
                         total_liberados += len(resultado.awbs_liberados)
                         total_retidos += len(resultado.awbs_retidos)
 
+                        # Acumula AWBs com termo para verificacao final
+                        for awb in resultado.awbs_retidos:
+                            awbs_com_termo_sessao[awb] = voo.numero_controle
+
                         # Telegram: voo concluido
                         if self._telegram_bot and self._telegram_bot.configurado:
                             self._telegram_bot.notificar_voo_concluido(
@@ -1026,6 +1033,11 @@ class AppAutomacao:
             # Finaliza
             outlook.fechar_aba()
             sefaz.fechar_aba()
+
+            # ========= VERIFICACAO FINAL: AWBs com termo devem estar retidos =========
+            if awbs_com_termo_sessao:
+                self._verificar_retencao_final(browser, awbs_com_termo_sessao)
+
             browser.fechar()
 
             # Barra 100%
@@ -1056,6 +1068,72 @@ class AppAutomacao:
             messagebox.showerror("Erro", str(e))
         finally:
             self._processando = False
+
+    def _verificar_retencao_final(self, browser, awbs_com_termo: dict):
+        """
+        Verificacao final pos-liberacao: para cada AWB que deveria estar retido,
+        consulta o status via busca rapida e confirma que esta realmente retido.
+        
+        Se algum AWB com termo NAO esta retido, gera ALERTA.
+        Isso pega casos como: AWB liberado em voo anterior mas que teve
+        novos volumes retidos em voo posterior.
+        
+        Args:
+            browser: NexlogBrowser ja logado
+            awbs_com_termo: dict {awb: voo} de AWBs que deveriam estar retidos
+        """
+        self._log("")
+        self._log("=" * 60)
+        self._log("VERIFICACAO FINAL: Conferindo AWBs com termo...")
+        self._log("=" * 60)
+
+        alertas = []
+
+        from modules.consulta_cliente import ConsultaCliente
+        consulta = ConsultaCliente(browser)
+
+        for awb, voo_origem in awbs_com_termo.items():
+            try:
+                resultado = consulta.consultar_awb(awb)
+                status_op = resultado.status_operacional.upper()
+
+                if "RETID" in status_op:
+                    self._log(f"  AWB {awb}: OK (Retida)")
+                else:
+                    # ALERTA: AWB com termo mas NAO esta retido!
+                    alerta_msg = (
+                        f"ALERTA: AWB {awb} (voo {voo_origem}) tem termo mas "
+                        f"status = '{resultado.status_operacional}' (NAO RETIDO!)"
+                    )
+                    self._log(f"  {alerta_msg}")
+                    alertas.append(alerta_msg)
+
+            except Exception as e:
+                self._log(f"  AWB {awb}: Erro na verificacao - {str(e)[:50]}")
+
+        # Resumo
+        if alertas:
+            self._log("")
+            self._log(f"{'!'*60}")
+            self._log(f"  {len(alertas)} ALERTA(S) - AWBs com termo NAO retidos!")
+            self._log(f"  Verificar manualmente:")
+            for a in alertas:
+                self._log(f"    {a}")
+            self._log(f"{'!'*60}")
+
+            # Telegram: avisa sobre alertas
+            if self._telegram_bot and self._telegram_bot.configurado:
+                msg = (
+                    f"ALERTA POS-LIBERACAO!\n\n"
+                    f"{len(alertas)} AWB(s) com termo NAO estao retidos:\n"
+                )
+                for a in alertas[:5]:
+                    msg += f"\n{a}"
+                self._telegram_bot.notificar(msg)
+        else:
+            self._log(f"  Todos os {len(awbs_com_termo)} AWBs com termo estao RETIDOS. OK!")
+
+        self._log("")
 
     def _processar_um_voo(self, voo: Voo, browser, voos_mod, cte_mod, liberar_mod, outlook, sefaz, indice_progresso: int = -1) -> ResultadoProcessamento:
         """Processa um unico voo completo com atualizacao de progresso."""
